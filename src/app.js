@@ -24,7 +24,7 @@ async function api(path) {
 async function load() {
   $("status").textContent = "lädt…";
   try {
-    coins = await api("/coins/markets?vs_currency=usd&category=meme-token&order=market_cap_desc&per_page=50&page=1&price_change_percentage=24h");
+    coins = await api("/coins/markets?vs_currency=usd&category=meme-token&order=market_cap_desc&per_page=50&page=1&price_change_percentage=24h&sparkline=true");
     $("status").textContent = "Stand: " + new Date().toLocaleTimeString();
   } catch (e) {
     $("status").textContent = "⚠ " + e.message;
@@ -32,14 +32,32 @@ async function load() {
   render();
 }
 
+function spark(c) {
+  const p = c.sparkline_in_7d?.price || []; if (p.length < 2) return "";
+  const step = Math.ceil(p.length / 60), s = p.filter((_, i) => i % step === 0), min = Math.min(...s), max = Math.max(...s), r = max - min || 1;
+  const up = s[s.length - 1] >= s[0];
+  return `<svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none"><polyline fill="none" stroke="${up ? "#14f195" : "#ff4d6d"}" stroke-width="1.6" points="${s.map((v, i) => `${(i / (s.length - 1)) * 100},${28 - ((v - min) / r) * 26}`).join(" ")}"/></svg>`;
+}
+function renderOverview() {
+  if (!coins.length) return;
+  const mc = coins.reduce((s, c) => s + (c.market_cap || 0), 0), vol = coins.reduce((s, c) => s + (c.total_volume || 0), 0);
+  const avg = coins.reduce((s, c) => s + (c.price_change_percentage_24h || 0), 0) / coins.length;
+  const by = [...coins].sort((a, b) => (b.price_change_percentage_24h || 0) - (a.price_change_percentage_24h || 0));
+  const top = by[0], flop = by[by.length - 1];
+  $("overview").innerHTML = `<div class="ov"><span>Market Cap Top 50</span><b>$${big(mc)}</b></div>
+    <div class="ov"><span>Volumen 24h</span><b>$${big(vol)}</b></div>
+    <div class="ov"><span>Ø 24h</span><b>${pct(avg)}</b></div>
+    <div class="ov"><span>Top-Gewinner</span><b><img class="ic" src="${esc(top.image)}" alt="">${esc(top.symbol.toUpperCase())} ${pct(top.price_change_percentage_24h)}</b></div>
+    <div class="ov"><span>Top-Verlierer</span><b><img class="ic" src="${esc(flop.image)}" alt="">${esc(flop.symbol.toUpperCase())} ${pct(flop.price_change_percentage_24h)}</b></div>`;
+}
 function coinRows(list) {
   return list.map((c) => `<tr>
     <td><button class="star" data-star="${c.id}">${watch.includes(c.id) ? "★" : "☆"}</button></td>
     <td><img class="ic" src="${esc(c.image)}" alt="">${esc(c.name)} <span class="mut">${esc(c.symbol.toUpperCase())}</span></td>
     <td>${usd(c.current_price)}</td><td>${pct(c.price_change_percentage_24h)}</td>
-    <td>${big(c.market_cap)}</td><td>${big(c.total_volume)}</td></tr>`).join("");
+    <td class="hide-s">${big(c.market_cap)}</td><td class="hide-s">${big(c.total_volume)}</td><td>${spark(c)}</td></tr>`).join("");
 }
-const head = "<tr><th></th><th>Coin</th><th>Preis</th><th>24h</th><th>Market Cap</th><th>Volumen</th></tr>";
+const head = "<tr><th></th><th>Coin</th><th>Preis</th><th>24h</th><th class='hide-s'>Market Cap</th><th class='hide-s'>Volumen</th><th>7 Tage</th></tr>";
 
 function renderMarket() {
   $("market").innerHTML = `<table>${head}${coinRows(coins)}</table>`;
@@ -113,7 +131,7 @@ function trade(side, id, amount) {
   renderPaper();
 }
 
-function render() { renderMarket(); renderWatch(); if (!$("paper").hidden) renderPaper(); }
+function render() { renderOverview(); renderMarket(); renderWatch(); if (!$("paper").hidden) renderPaper(); }
 
 document.addEventListener("click", (e) => {
   const star = e.target.closest("[data-star]");

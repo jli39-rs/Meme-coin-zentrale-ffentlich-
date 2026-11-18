@@ -25,8 +25,16 @@ Danach öffnet sich http://localhost:8080 im Browser.
 Hinweis: Die kostenlose CoinGecko-API hat ein Rate-Limit; bei Fehlermeldung kurz warten.
 Kein echter Handel, keine Finanzberatung.
 
-## Claude Bot (`bot.html`)
-Handy-Layout mit Agenten-Ansicht (Scanner → Safety → Analyst → Risk → Executor), Kurve und Entscheidungs-Stream. Handelt automatisch mit **virtuellen 100 $** auf Basis der Live-Preise. v2: neue & trendende Solana-Coins über GeckoTerminal, Risikostufen (Vorsichtig/Normal/Aggressiv), Trailing-Stop, Zeit-Exit, simulierte Gebühren/Slippage und Statistik. Öffnen: http://localhost:8080/bot.html (oder Link in der Zentrale). Kein Wallet, kein echter Handel.
+## Claude Bot (`bot.html`) – v3
+Paper-Trading-Bot mit **virtuellen 5 SOL** (kein Wallet, kein echter Handel).
+- **Coins:** neue & trendende Solana-Pools (GeckoTerminal) + etablierte Meme Coins (CoinGecko)
+- **Top-Trade live:** Candlestick-Chart der besten offenen Position (TradingView Lightweight Charts, Daten GeckoTerminal/CoinGecko) mit Einstieg, Ziel und Stop
+- **Rug-Check** (RugCheck-API) vor jedem Kauf eines neuen Coins: Mint-/Freeze-Authority, LP gesperrt/verbrannt, Top-10-Holder, größter Holder, Insider-Cluster, Dev-Anteil, RugCheck-Risiken → Risiko-Score 0–100
+- **Bubble-Map** der Top-Holder (Insider rot, Dev orange, Pool/LP blau) + Links zu RugCheck, Bubblemaps, Solscan
+- **Risikostufen**, Trailing-Stop, Zeit-Exit, Notverkauf bei Liquiditätsabzug, simulierte Gebühren/Slippage/Netzwerkgebühr
+- Läuft nur, solange die Seite offen ist. Keine Finanzberatung.
+
+Rug-Kriterien (Faustregeln aus öffentlichen Checklisten, keine Garantie): Mint/Freeze aktiv = Ausschluss · LP < 50 % gesperrt = Ausschluss, < 80 % = Risiko · Top-10 (ohne Pool) > 40 % = Ausschluss · ein Wallet > 15 % = Ausschluss · Insider > 20 % = Ausschluss · Dev > 5 % = Risiko.
 
 ## Zugangscode
 Beide Seiten fragen beim ersten Öffnen nach einem Code (`src/gate.js`). Im Repo steht nur ein Hash (`src/gate-config.js`), nicht der Code selbst.
