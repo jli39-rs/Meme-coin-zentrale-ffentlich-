@@ -6,9 +6,9 @@ Lokales Dashboard für Meme Coins: Kurse, Watchlist, Trends und **Paper Trading*
 
 ```bash
 # 1. Repo klonen (git ist nach `xcode-select --install` vorhanden)
-git clone https://github.com/jli39-rs/Meme-coin-zentrale-.git
-cd Meme-coin-zentrale-
-git checkout claude/eloquent-gates-a4n0qg   # bis der Branch gemerged ist
+git clone https://github.com/jli39-rs/meme-coin-zentrale-ffentlich-.git
+cd meme-coin-zentrale-ffentlich-
+
 
 # 2. Starten (python3 liegt auf dem Mac bereits bei den Command Line Tools)
 ./start.sh
