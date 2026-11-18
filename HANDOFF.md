@@ -34,21 +34,34 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
    - `guarded()` = Backoff je Quelle; Status oben als `GT ✓/✗ DS ✓/✗`
 3. **Rug-Check** `analyseRug()`: Score 0–100. Harte Ausschlüsse: rugged, Mint-/Freeze-Authority aktiv, LP < 50 % gesperrt, Top-10 (ohne Pool) > 40 %, ein Wallet > 15 %, Insider > 20 %. Pool-Wallets werden erkannt, wenn ihre Adresse in `markets` vorkommt.
 4. **Strategie** `score()` + `tick()` alle 5 s: Ausstiege (Take-Profit, Stop, Trailing, Zeit-Exit, Notverkauf bei −40 % Liquidität), dann bester Kandidat → Rug-Check → Kauf.
-5. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **einfacher** Bubble-Map (Spirale, nur Top-Holder aus RugCheck), Agenten, Live-Trades, Entscheidungs-Log.
+5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
+6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
-## Was NICHT verifiziert ist (wichtig!)
-Die Cloud-Session konnte keine der APIs live erreichen (Netzwerk gesperrt). Alles wurde nur mit **gemockten** Antworten getestet. Auf dem Mac bitte zuerst prüfen:
-- Antwortet RugCheck aus dem Browser (CORS)? Stimmen die Feldnamen (`token.mintAuthority`, `token.freezeAuthority`, `markets[].lp.lpLockedPct`, `topHolders[].{address,owner,pct,insider}`, `graphInsidersDetected`, `score_normalised`, `risks[].level`, `creator`, `rugged`)?
-- GeckoTerminal zeigte bei der Nutzerin in Safari „Load failed“ (vermutlich Rate-Limit oder CORS). Deshalb gibt es den DexScreener-Fallback – ob DexScreener wirklich geht, ist ebenfalls ungetestet.
-- Schnelltest im Terminal: `curl -s https://api.rugcheck.xyz/v1/tokens/<mint>/report | head -c 2000` und `curl -sI https://api.geckoterminal.com/api/v2/networks/solana/new_pools` (auf `access-control-allow-origin` achten).
+## API-Prüfung (18.11.2026, live gegen die echten APIs)
+Alle vier APIs antworten mit `access-control-allow-origin: *` (CORS ok): RugCheck, GeckoTerminal, DexScreener, CoinGecko.
+- **RugCheck** `/v1/tokens/<mint>/report`: Feldnamen stimmen (`token.mintAuthority/freezeAuthority/supply`, `markets[].lp.lpLockedPct`, `topHolders[].{address,owner,pct,insider}`, `graphInsidersDetected`, `score_normalised`, `risks[].{name,level}`, `creator`, `rugged`, `totalHolders`). Neu genutzt: `knownAccounts` (Typ `AMM`/`LOCKER`/`CREATOR` → Pool- und Dev-Wallets), `insiderNetworks[]` (`size`, `type` transfer|trade, `currentHolding` in Roh-Einheiten → % über `token.supply`).
+  - Reports großer Coins sind riesig (BONK ≈ 2,5 MB) – für neue Pump.fun-Coins nur ein paar KB.
+  - `lpLockedPct` ist fast überall 100 → „Maximum über alle Märkte“ war wertlos. Jetzt zählt der gehandelte bzw. größte Pool; bei konzentrierter Liquidität (Raydium CLMM, Meteora DLMM, Orca) gibt es keinen LP-Lock → nur leichter Malus.
+  - **Insider-Graph** `/v1/tokens/<mint>/insiders/graph` → `[{net_id, network_type, nodes:[{id, participant, holdings}], links:[{source, target}]}]`. Das ist genau die Bubblemaps-Struktur (Quelle → Wallets). Riesen-Netzwerke (> 1000 Wallets, meist Börse/Airdrop) fehlen im Graph und stehen nur in `insiderNetworks`; sie werden nicht gewertet. Prozentwerte können unplausibel sein (ein Coin hatte 115 %) → auf 100 % gedeckelt.
+  - `/lockers` braucht einen bezahlten Plan (401).
+- **GeckoTerminal**: Felder stimmen. Ursache für Safari-„Load failed“ gefunden: Bei Überlast (~30 Anfragen/Min) kommt **429 ohne CORS-Header**, das meldet der Browser als Netzwerkfehler. Der Bot hat durch einen Bug in `render()` denselben Chart-Abruf bis zu 7× parallel gestartet. Behoben: kein paralleler Chart-Abruf mehr, alle GT-Anfragen mit ≥ 2,5 s Abstand (gemessen ~10/Min).
+  - Pools haben teils USDC/andere Token als Gegenwährung, manchmal ist SOL selbst Basis-Token → SOL/USDC/USDT als Basis werden übersprungen.
+- **DexScreener**: Felder stimmen (`pairs[].{pairAddress, baseToken, priceUsd, txns.m5, volume, priceChange, liquidity.usd, fdv, pairCreatedAt}`); `latest/dex/pairs/solana/<a>` liefert `pairs` + `pair`.
+- **CoinGecko**: ok, aber das Gratis-Limit wird schnell erreicht (429 ohne CORS) – der Bot läuft dann ohne etablierte Coins weiter.
+
+## Was weiterhin NICHT verifiziert ist
+- Safari auf dem iPhone selbst (getestet nur mit Chromium/Playwright).
+- Ob die Cluster-Schwellen (Vorsichtig 12 % / Normal 18 % / Aggressiv 25 %, Bundle ab 8/12/20 Wallets mit ≥ 2/4/6 %) echte Rugs zuverlässig erkennen – das sind Startwerte, an echten Rug-Pulls nachschärfen.
+- „Frische Wallets“: RugCheck sagt nicht, wie alt eine Wallet ist. Die Bundle-Regel zählt nur Wallets, die von **einer** Quelle Tokens bekommen haben (Fan-out im Graph). Eigene Funding-Analyse über Solana-RPC wurde bewusst nicht gebaut (öffentlicher RPC ist stark limitiert und langsam).
+- Netzwerke mit 300–1000 Wallets (z. B. 770 Wallets / 19 %) werden als Cluster gewertet – kann bei großen Coins zu streng sein.
 
 ## Nächste Aufgaben (Wünsche der Nutzerin)
-1. **Cluster-Bubble-Map wie bei Bubblemaps**: Die Nutzerin hat einen Screenshot geschickt: große Ringe aus vielen Wallets, die alle von **einer gemeinsamen Quell-Wallet** (Mitte, Pfeile nach außen) gefüttert werden, farbig je Cluster, kleine lose Holder drumherum. Aktuell zeigt die Map nur die Top-Holder ohne Verbindungen. Umsetzung z. B.:
+1. ~~**Cluster-Bubble-Map wie bei Bubblemaps**~~ (erledigt über RugCheck-Insider-Graph): Die Nutzerin hat einen Screenshot geschickt: große Ringe aus vielen Wallets, die alle von **einer gemeinsamen Quell-Wallet** (Mitte, Pfeile nach außen) gefüttert werden, farbig je Cluster, kleine lose Holder drumherum. Aktuell zeigt die Map nur die Top-Holder ohne Verbindungen. Umsetzung z. B.:
    - Holder-Liste von RugCheck (oder `getTokenLargestAccounts` per Solana-RPC),
    - pro Wallet die **erste eingehende SOL-Überweisung** (Funding-Quelle) über Solana-RPC/Helius/Solscan ermitteln, Wallets mit gleicher Quelle = Cluster,
    - prüfen, ob RugCheck selbst einen Insider-Graph liefert (z. B. `insiderNetworks` im Report oder ein eigener Graph-Endpunkt) – dann ist das viel einfacher,
    - Darstellung: Force-Layout (z. B. d3-force aus cdnjs) mit Hub in der Mitte und Pfeilen.
-2. **Rug-Pools gezielt ausfiltern über Cluster**: Wenn ein Cluster (gleiche Funding-Quelle) zusammen > ~15–20 % hält oder viele frische Wallets aus einer Quelle kaufen (Bundle/Sniper), Coin blockieren. Neuer Grund im Log wie „🛡️ Cluster aus 37 Wallets hält 28 %“.
+2. ~~**Rug-Pools gezielt ausfiltern über Cluster**~~ (erledigt, Schwellen je Risikostufe in `PRESETS`): Wenn ein Cluster (gleiche Funding-Quelle) zusammen > ~15–20 % hält oder viele frische Wallets aus einer Quelle kaufen (Bundle/Sniper), Coin blockieren. Neuer Grund im Log wie „🛡️ Cluster aus 37 Wallets hält 28 %“.
 3. **Läuft lokal / „einfach eine Seite im Netz“**: Lokal genügt `./start.sh` → http://localhost:8080/bot.html. Die öffentliche Seite gibt es bereits über GitHub Pages (Link oben). Falls ein eigener Host gewünscht ist: Netlify/Vercel/Cloudflare Pages, alles statisch, kein Build.
 4. **Features aus einem Video**: Die Nutzerin will noch ein Video zeigen – danach fragen.
 5. Bei echten APIs: Felder/Schwellen anhand echter Rug-Pull-Beispiele prüfen und nachschärfen.
@@ -57,10 +70,12 @@ Die Cloud-Session konnte keine der APIs live erreichen (Netzwerk gesperrt). Alle
 ```bash
 npm i -D playwright   # falls nicht vorhanden; dann: npx playwright install chromium
 ./start.sh &          # Server auf :8080
-ZENTRALE_CODE=<zugangscode> node tests/test-rugcheck-mock.js
-ZENTRALE_CODE=<zugangscode> node tests/test-dexscreener-fallback.js
+node tests/test-rugcheck-mock.js        # Mocks im echten RugCheck-Format, beendet sich mit Fehlercode bei Problemen
+node tests/test-dexscreener-fallback.js # GeckoTerminal fällt aus → DexScreener übernimmt
+node tests/test-live.js                 # OHNE Mocks gegen die echten APIs (MINT=<mint> für eine bestimmte Bubble-Map)
 ```
-Die Tests mocken alle APIs und prüfen: Coin mit aktiver Mint-Authority und Insider-Cluster wird blockiert, sicherer Coin wird gekauft und mit Take-Profit verkauft; bei Ausfall von GeckoTerminal übernimmt DexScreener.
+Die Tests entsperren die Seite über den (öffentlichen) Hash aus `src/gate-config.js`; mit `ZENTRALE_CODE=<code>` wird stattdessen der echte Code eingegeben.
+Der Mock-Test prüft: Mint-Authority, Cluster (16 Wallets / 24 %) und Bundle (14 Wallets aus einer Quelle) werden blockiert, sicherer Coin wird gekauft und mit Take-Profit verkauft, Pool-Wallet zählt nicht als Holder, Bubble-Map hat Pfeile.
 
 ## Regeln, die bisher galten
 - Kein echtes Trading, kein Wallet, keine Seed-Phrases/Private Keys – nur Simulation.

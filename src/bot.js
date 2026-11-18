@@ -1,17 +1,21 @@
 // Claude Bot v3 – reine Paper-Trading-Simulation mit virtuellen 5 SOL (kein Wallet, kein echter Handel).
 // Daten: GeckoTerminal (neue/trendende Solana-Pools, Charts, SOL-Preis), CoinGecko (etablierte Meme Coins),
-// RugCheck (Rug-Pull-Prüfung + Holder für die Bubble-Map). Charts: TradingView Lightweight Charts.
+// RugCheck (Rug-Pull-Prüfung, Holder + Insider-Netzwerke für die Cluster-Bubble-Map). Charts: TradingView Lightweight Charts,
+// Bubble-Map: d3-force. Feldnamen am 18.11.2026 gegen die echten API-Antworten geprüft.
 const CG = "https://api.coingecko.com/api/v3";
 const GT = "https://api.geckoterminal.com/api/v2/networks/solana";
 const RC = "https://api.rugcheck.xyz/v1/tokens/";
 const DS = "https://api.dexscreener.com";
 const WSOL = "So11111111111111111111111111111111111111112";
+// Basis-Token, die kein Meme Coin sind (GeckoTerminal listet auch Pools wie "SOL / XYZ" oder "USDC / XYZ")
+const NOT_MEME = new Set([WSOL, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]);
 const START = 5, TICK_MS = 5000, NET_FEE = 0.0005, MIN_TRADE = 0.05; // SOL
 const FEE = { cg: 0.003, gt: 0.01 }; // simulierte DEX-Gebühr + Slippage je Seite
 const PRESETS = {
-  vorsichtig: { size: 0.06, tp: 15, sl: 7,  trailOn: 8,  trail: 4,  maxPos: 4, minScore: 3.5, minLiq: 60000, timeMin: 120, maxRug: 25 },
-  normal:     { size: 0.10, tp: 30, sl: 12, trailOn: 12, trail: 6,  maxPos: 6, minScore: 3.0, minLiq: 25000, timeMin: 60,  maxRug: 40 },
-  aggressiv:  { size: 0.15, tp: 90, sl: 20, trailOn: 25, trail: 12, maxPos: 8, minScore: 2.5, minLiq: 12000, timeMin: 30,  maxRug: 55 },
+  // clMax = größter Cluster (gemeinsame Funding-Quelle) in % · bundleN/bundlePct = ab so vielen Wallets aus einer Quelle mit so viel % → Bundle/Sniper
+  vorsichtig: { size: 0.06, tp: 15, sl: 7,  trailOn: 8,  trail: 4,  maxPos: 4, minScore: 3.5, minLiq: 60000, timeMin: 120, maxRug: 25, clMax: 12, bundleN: 8,  bundlePct: 2 },
+  normal:     { size: 0.10, tp: 30, sl: 12, trailOn: 12, trail: 6,  maxPos: 6, minScore: 3.0, minLiq: 25000, timeMin: 60,  maxRug: 40, clMax: 18, bundleN: 12, bundlePct: 4 },
+  aggressiv:  { size: 0.15, tp: 90, sl: 20, trailOn: 25, trail: 12, maxPos: 8, minScore: 2.5, minLiq: 12000, timeMin: 30,  maxRug: 55, clMax: 25, bundleN: 20, bundlePct: 6 },
 };
 const LABEL = { vorsichtig: "Vorsichtig", normal: "Normal", aggressiv: "Aggressiv" };
 
@@ -34,14 +38,20 @@ if (!S || S.v !== 3) S = fresh(); // Umstellung auf SOL: neuer Start mit 5 SOL
 let CFG = { risk: "normal", neu: true, etabliert: true, rug: true, ...load("claudebot-cfg", {}) };
 const mk = {};            // Marktdaten: key -> Coin/Pool
 const rug = {};           // Rug-Check-Ergebnisse: mint -> Bericht
+const rugRaw = {};        // Rohdaten (Report + Insider-Graph) je mint – für Neuberechnung bei anderer Risikostufe
 let solUsd = 0, paused = false, errs = {}, focusKey = null, focusSel = null;
 const save = () => { try { localStorage.setItem("claudebot", JSON.stringify(S)); localStorage.setItem("claudebot-cfg", JSON.stringify(CFG)); } catch {} };
 const P = () => PRESETS[CFG.risk] || PRESETS.normal;
 
 // ---------- Daten ----------
+// GeckoTerminal erlaubt ~30 Anfragen/Min. Bei Überschreitung kommt 429 OHNE CORS-Header – der Browser meldet das als
+// Netzwerkfehler (Safari: "Load failed"). Deshalb alle GT-Anfragen hintereinander mit Mindestabstand.
+const GT_GAP = 2500;
+let gtNext = 0;
 async function getJSON(u) {
+  if (u.startsWith(GT.replace("/networks/solana", ""))) { const t = Math.max(now(), gtNext); gtNext = t + GT_GAP; if (t > now()) await sleep(t - now()); }
   let r;
-  try { r = await fetch(u); } catch { throw new Error("blockiert/Limit"); } // Safari: "Load failed" (CORS oder Rate-Limit)
+  try { r = await fetch(u); } catch { throw new Error("blockiert/Limit"); } // Safari: "Load failed" (meist 429 ohne CORS-Header)
   if (r.status === 429) throw new Error("Rate-Limit");
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
@@ -83,17 +93,18 @@ function gtItems(json, extra = {}) {
   const inc = {};
   (json.included || []).forEach((t) => (inc[t.id] = t.attributes));
   return (json.data || []).map((p) => {
+    if (NOT_MEME.has((p.relationships?.base_token?.data?.id || "").replace(/^solana_/, ""))) return null;
     const a = p.attributes, tid = p.relationships?.base_token?.data?.id || "", tok = inc[tid] || {};
     const pc = a.price_change_percentage || {}, tx = a.transactions || {}, vol = a.volume_usd || {};
     return {
-      key: "gt:" + a.address, src: "gt", pool: a.address, mint: tok.address || tid.replace(/^solana_/, ""),
+      key: "gt:" + a.address, src: "gt", ds: false, pool: a.address, mint: tok.address || tid.replace(/^solana_/, ""),
       sym: String(tok.symbol || a.name.split(" / ")[0]).toUpperCase().slice(0, 12), name: tok.name || a.name,
       img: tok.image_url && tok.image_url !== "missing.png" ? tok.image_url : "", price: +a.base_token_price_usd,
       fdv: +(a.fdv_usd || 0), liq: +(a.reserve_in_usd || 0), ch5: +(pc.m5 || 0), ch1: +(pc.h1 || 0), ch24: +(pc.h24 || 0),
       buys: tx.m5?.buys || 0, sells: tx.m5?.sells || 0, buyers: tx.m5?.buyers || 0, vol5: +(vol.m5 || 0), vol1: +(vol.h1 || 0),
       age: a.pool_created_at ? (now() - new Date(a.pool_created_at)) / 60000 : null, t: now(), ...extra,
     };
-  });
+  }).filter(Boolean);
 }
 async function loadGT() { // nacheinander statt parallel, schont das Rate-Limit
   const n = await getJSON(`${GT}/new_pools?include=base_token`);
@@ -121,7 +132,7 @@ async function loadDS() {
   const d = await getJSON(`${DS}/latest/dex/tokens/${mints.join(",")}`);
   const best = {};
   for (const x of d.pairs || []) {
-    if (x.chainId !== "solana" || !mints.includes(x.baseToken?.address)) continue;
+    if (x.chainId !== "solana" || !mints.includes(x.baseToken?.address) || NOT_MEME.has(x.baseToken.address)) continue;
     const m = x.baseToken.address;
     if (!best[m] || (x.liquidity?.usd || 0) > (best[m].liquidity?.usd || 0)) best[m] = x;
   }
@@ -142,50 +153,113 @@ async function loadHeld() {
 
 // ---------- Rug-Check ----------
 // Kriterien nach gängigen Checklisten (RugCheck, Bubblemaps, DEXTools u. a.):
-// Mint-/Freeze-Authority aktiv = Ausschluss · LP < 80 % gesperrt/verbrannt = Risiko · Top-10 > 40 % (ohne Pool) = Ausschluss
-// einzelner Holder > 15 % = Ausschluss · Insider/Cluster > 20 % = Ausschluss · Dev > 5 % = Risiko · RugCheck-"danger"-Risiken.
-function analyseRug(r) {
-  const out = { score: 0, reasons: [], ok: [], reject: false, holders: [] };
-  const bad = (pts, txt, hard) => { out.score += pts; out.reasons.push(txt); if (hard) out.reject = true; };
+// Mint-/Freeze-Authority aktiv = Ausschluss · LP des Haupt-Pools < 50 % gesperrt = Ausschluss · Top-10 > 40 % (ohne Pool) = Ausschluss
+// einzelner Holder > 15 % = Ausschluss · Insider > 20 % = Ausschluss · Cluster (gemeinsame Funding-Quelle) > clMax = Ausschluss
+// Bundle/Sniper (viele Wallets aus einer Quelle) = Ausschluss · Dev > 5 % = Risiko · RugCheck-"danger"-Risiken.
+// Echte RugCheck-Felder (geprüft 18.11.2026): token.{mintAuthority,freezeAuthority,supply}, markets[].{pubkey,marketType,liquidityA,liquidityB,
+// lp.{lpLockedPct,baseUSD,quoteUSD}}, topHolders[].{address,owner,pct,insider}, knownAccounts{addr:{name,type:AMM|LOCKER|CREATOR}},
+// insiderNetworks[].{id,size,type:transfer|trade,currentHolding}, graphInsidersDetected, risks[].{name,level}, score_normalised, rugged, totalHolders.
+// Insider-Graph: GET /v1/tokens/<mint>/insiders/graph → [{net_id, network_type, nodes:[{id,participant,holdings}], links:[{source,target}]}]
+const CL_POOL = /clmm|dlmm|whirlpool|orca|concentrated/i; // konzentrierte Liquidität: LP-Lock nicht anwendbar
+const MASS_NET = 1000; // Netzwerke mit > 1000 Wallets sind meist Börsen/Airdrops, keine Rug-Cluster
+function analyseRug(r, g, pool) {
+  const R = P();
+  const out = { score: 0, reasons: [], hard: [], ok: [], notes: [], reject: false, holders: [], clusters: [] };
+  const bad = (pts, txt, hard) => { out.score += pts; out.reasons.push(txt); if (hard) { out.reject = true; out.hard.push(txt); } };
   if (r.rugged) bad(100, "Bereits als Rug markiert", true);
   const tok = r.token || {};
-  tok.mintAuthority ? bad(40, "Mint-Authority aktiv (unbegrenzt neue Tokens möglich)", true) : out.ok.push("Mint gesperrt");
-  tok.freezeAuthority ? bad(40, "Freeze-Authority aktiv (Honeypot-Gefahr)", true) : out.ok.push("Freeze gesperrt");
-  const marketStr = JSON.stringify(r.markets || []);
-  const lp = Math.max(0, ...(r.markets || []).map((m) => +(m.lp?.lpLockedPct ?? 0)), +(r.lpLockedPct ?? 0));
-  out.lp = lp;
-  if (lp < 50) bad(30, `Liquidität nur ${lp.toFixed(0)}% gesperrt – kann abgezogen werden`, true);
+  (tok.mintAuthority ?? r.mintAuthority) ? bad(40, "Mint-Authority aktiv (unbegrenzt neue Tokens möglich)", true) : out.ok.push("Mint gesperrt");
+  (tok.freezeAuthority ?? r.freezeAuthority) ? bad(40, "Freeze-Authority aktiv (Honeypot-Gefahr)", true) : out.ok.push("Freeze gesperrt");
+  // LP: zählt der gehandelte Pool (bzw. der größte), nicht irgendein Mini-Pool mit 100 % Lock
+  const ms = r.markets || [], liqOf = (m) => (+m.lp?.baseUSD || 0) + (+m.lp?.quoteUSD || 0);
+  const main = ms.find((m) => pool && m.pubkey === pool) || [...ms].sort((a, b) => liqOf(b) - liqOf(a))[0];
+  const lp = main ? +(main.lp?.lpLockedPct ?? 0) : +(r.lpLockedPct ?? 0);
+  Object.assign(out, { lp, lpType: main?.marketType || "", clmm: CL_POOL.test(main?.marketType || "") });
+  if (out.clmm) bad(6, `Haupt-Pool ${main.marketType}: konzentrierte Liquidität, kein LP-Lock möglich`);
+  else if (lp < 50) bad(30, `Liquidität nur ${lp.toFixed(0)}% gesperrt – kann abgezogen werden`, true);
   else if (lp < 80) bad(15, `Liquidität nur ${lp.toFixed(0)}% gesperrt`);
   else out.ok.push(`LP ${lp.toFixed(0)}% gesperrt/verbrannt`);
-  const creator = r.creator || "";
-  out.holders = (r.topHolders || []).map((h) => {
-    const inM = (a) => !!a && a.length >= 32 && marketStr.includes(a); const isLp = inM(h.address) || inM(h.owner);
-    return { addr: h.owner || h.address || "?", pct: +h.pct || 0, insider: !!h.insider, dev: !!creator && (h.owner === creator || h.address === creator), lp: isLp };
-  });
+  // Pool-/Locker-Wallets erkennen (zählen nicht als Holder)
+  const known = r.knownAccounts || {}, poolSet = new Set();
+  for (const m of ms) [m.pubkey, m.liquidityA, m.liquidityB, m.liquidityAAccount?.owner, m.liquidityBAccount?.owner].forEach((a) => a && poolSet.add(a));
+  for (const [a, k] of Object.entries(known)) if (/AMM|LOCKER|POOL/i.test(k?.type || "")) poolSet.add(a);
+  const isPool = (a) => !!a && poolSet.has(a);
+  const creator = r.creator || "", isDev = (a) => !!a && (a === creator || known[a]?.type === "CREATOR");
+  out.holders = (r.topHolders || []).map((h) => ({ addr: h.owner || h.address || "?", acct: h.address, pct: +h.pct || 0, insider: !!h.insider,
+    dev: isDev(h.owner) || isDev(h.address), lp: isPool(h.address) || isPool(h.owner) }));
   const real = out.holders.filter((h) => !h.lp);
   const top10 = real.slice(0, 10).reduce((s, h) => s + h.pct, 0), top1 = real[0]?.pct || 0;
   const ins = real.filter((h) => h.insider).reduce((s, h) => s + h.pct, 0), dev = real.filter((h) => h.dev).reduce((s, h) => s + h.pct, 0);
-  Object.assign(out, { top10, top1, ins, dev });
+  Object.assign(out, { top10, top1, ins, dev, holderCount: r.totalHolders ?? null });
   if (top10 > 40) bad(25, `Top-10 halten ${top10.toFixed(0)}%`, true); else if (top10 > 25) bad(10, `Top-10 halten ${top10.toFixed(0)}%`); else out.ok.push(`Top-10 nur ${top10.toFixed(0)}%`);
   if (top1 > 15) bad(20, `Ein Wallet hält ${top1.toFixed(1)}%`, true); else if (top1 > 8) bad(8, `Größter Holder ${top1.toFixed(1)}%`);
-  if (ins > 20) bad(25, `Insider-Cluster halten ${ins.toFixed(0)}%`, true); else if (ins > 8 || (r.graphInsidersDetected || 0) > 0) bad(12, `Insider erkannt (${ins.toFixed(0)}%)`);
+  if (ins > 20) bad(25, `Insider halten ${ins.toFixed(0)}%`, true); else if (ins > 8) bad(12, `Insider halten ${ins.toFixed(0)}%`);
   if (dev > 5) bad(10, `Dev hält ${dev.toFixed(1)}%`);
+  if (r.totalHolders != null && r.totalHolders < 30) bad(8, `Nur ${r.totalHolders} Holder`);
   if (r.tokenMeta?.mutable) bad(5, "Metadaten änderbar");
+
+  // Cluster = Wallets mit gemeinsamer Funding-Quelle (RugCheck-Insider-Netzwerke)
+  const supply = +tok.supply || 0, nets = [];
+  const pctOf = (raw) => (supply ? Math.min(100, (100 * (+raw || 0)) / supply) : 0);
+  if (Array.isArray(g) && g.length) {
+    for (const n of g) {
+      const nodes = n.nodes || [], links = n.links || [], fan = {};
+      links.forEach((l) => (fan[l.source] = (fan[l.source] || 0) + 1));
+      const hub = Object.entries(fan).sort((a, b) => b[1] - a[1])[0];
+      const members = nodes.filter((x) => !isPool(x.id)).map((x) => ({ id: x.id, pct: pctOf(x.holdings), part: x.participant !== false }));
+      nets.push({ id: n.net_id, type: n.network_type || "transfer", size: nodes.length, pct: Math.min(100, members.reduce((s, x) => s + x.pct, 0)),
+        hub: hub?.[0] || null, fan: hub?.[1] || 0, members, links: links.filter((l) => !isPool(l.source) && !isPool(l.target)) });
+    }
+  }
+  // Zusammenfassung aus dem Report (enthält auch Riesen-Netzwerke, die der Graph weglässt)
+  for (const n of r.insiderNetworks || []) {
+    if (nets.length && (n.size || 0) <= MASS_NET) continue; // schon aus dem Graph
+    nets.push({ id: n.id, type: n.type || "transfer", size: n.size || n.activeAccounts || 0, pct: pctOf(n.currentHolding), hub: null, fan: Math.max(0, (n.size || 1) - 1), members: [], links: [] });
+  }
+  const cl = nets.filter((n) => n.size <= MASS_NET && n.size >= 2).sort((a, b) => b.pct - a.pct), mass = nets.filter((n) => n.size > MASS_NET);
+  out.clusters = cl; out.mass = mass;
+  const top = cl[0], sumCl = cl.reduce((s, n) => s + n.pct, 0);
+  out.clTop = top?.pct || 0; out.clSum = sumCl;
+  if (top && top.pct >= R.clMax) bad(30, `Cluster aus ${top.size} Wallets hält ${top.pct.toFixed(0)}%`, true);
+  else if (sumCl >= R.clMax * 1.5) bad(25, `${cl.length} Cluster halten zusammen ${sumCl.toFixed(0)}%`, true);
+  else if (top && top.pct >= R.clMax / 2) bad(12, `Cluster aus ${top.size} Wallets hält ${top.pct.toFixed(1)}%`);
+  else if (cl.length) out.ok.push(`größter Cluster ${out.clTop.toFixed(1)}%`);
+  const bundle = cl.filter((n) => n.type !== "trade" && n.fan >= R.bundleN && n.pct >= R.bundlePct).sort((a, b) => b.fan - a.fan)[0];
+  out.bundle = bundle || null;
+  if (bundle) bad(25, `Bundle/Sniper: ${bundle.fan} Wallets aus einer Quelle halten ${bundle.pct.toFixed(1)}%`, true);
+  const coord = cl.filter((n) => n.type === "trade" && n.size >= 20).sort((a, b) => b.size - a.size)[0];
+  if (coord) bad(8, `${coord.size} Wallets handeln koordiniert`);
+  if (mass.length) out.notes.push(`Großes Verteilungs-Netzwerk (${big(mass[0].size)} Wallets, ${mass[0].pct.toFixed(0)}%) – meist Börse/Airdrop, nicht gewertet`);
+
   const danger = (r.risks || []).filter((x) => x.level === "danger");
-  if (danger.length) bad(8 * danger.length, "RugCheck: " + danger.map((x) => x.name).join(", "));
+  const serial = danger.find((x) => /rugged/i.test(x.name || ""));
+  if (serial) bad(35, "Dev hat schon Rugs gemacht (RugCheck)", true);
+  const rest = danger.filter((x) => x !== serial && !/mint authority|freeze authority/i.test(x.name || ""));
+  if (rest.length) bad(8 * rest.length, "RugCheck: " + rest.map((x) => x.name).join(", "));
   out.score = Math.min(100, out.score);
   out.rc = r.score_normalised;
   return out;
 }
 let rugBusy = 0;
-function requestRug(mint) {
+function requestRug(mint, pool) {
   if (!mint || rug[mint] || now() - rugBusy < 2500) return;
   rugBusy = now(); rug[mint] = { pending: true, t: now() };
   S.calls[2]++;
-  getJSON(RC + mint + "/report").then((r) => { rug[mint] = { ...analyseRug(r), t: now() }; delete errs.RugCheck; })
-    .catch((e) => { rug[mint] = { fail: true, t: now() }; errs.RugCheck = e.message || "nicht erreichbar"; })
-    .finally(render);
+  (async () => {
+    try {
+      const r = await getJSON(RC + mint + "/report");
+      let g = null;
+      if ((r.graphInsidersDetected || 0) > 0 || (r.insiderNetworks || []).length) {
+        try { await sleep(400); g = await getJSON(RC + mint + "/insiders/graph"); } catch { g = null; } // Graph ist nur ein Zusatz
+      }
+      rugRaw[mint] = { r, g, pool };
+      rug[mint] = { ...analyseRug(r, g, pool), t: now(), graph: !!g };
+      delete errs.RugCheck;
+    } catch (e) { rug[mint] = { fail: true, t: now() }; errs.RugCheck = e.message || "nicht erreichbar"; }
+    render();
+  })();
 }
+const reanalyse = () => { for (const [m, x] of Object.entries(rugRaw)) rug[m] = { ...analyseRug(x.r, x.g, x.pool), t: rug[m]?.t || now(), graph: !!x.g }; };
 // Fallback, wenn RugCheck nicht erreichbar ist: nur ältere Pools mit viel Liquidität
 const fallbackOk = (m) => m.age != null && m.age > 60 && m.liq >= 50000;
 
@@ -217,6 +291,8 @@ function score(m) {
 }
 
 function log(type, sym, text) {
+  const t = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }), l0 = S.log[0];
+  if (l0 && l0.type === type && l0.sym === sym && l0.text === text) { l0.t = t; l0.n = (l0.n || 1) + 1; return; } // keine Wiederholungen
   S.log.unshift({ t: new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }), type, sym, text });
   S.log = S.log.slice(0, 50);
 }
@@ -237,7 +313,7 @@ function buy(m, why, rc) {
   const qty = (size * solUsd * (1 - FEE[m.src])) / m.price;
   S.cash -= size + NET_FEE; S.fees += NET_FEE + size * FEE[m.src];
   S.pos[m.key] = { src: m.src, sym: m.sym, name: m.name, img: m.img, mint: m.mint, pool: m.pool, qty, cost: size + NET_FEE, entry: m.price,
-    ts: now(), peak: 0, tp: R.tp, sl: R.sl, liq0: m.liq || 0, neu: !!m.neu, rug: rc ? rc.score : null };
+    ts: now(), peak: 0, tp: R.tp, sl: R.sl, liq0: m.liq || 0, liqDs: !!m.ds, neu: !!m.neu, rug: rc ? rc.score : null };
   S.trades++; S.calls[3]++;
   S.tr.unshift({ ts: now(), side: "BUY", sym: m.sym, img: m.img, p: m.price, amt: size, pnl: null, why: (m.neu ? "🆕 " : m.src === "gt" ? "🔥 " : "") + why + (rc ? ` · Rug ${rc.score}/100` : "") });
   S.tr = S.tr.slice(0, 80);
@@ -250,6 +326,8 @@ function tick() {
   // 1) Ausstiege
   for (const [k, p] of Object.entries(S.pos)) {
     const m = mk[k]; if (!m || now() - m.t > 10 * 60000) continue;
+    // GeckoTerminal und DexScreener messen Liquidität unterschiedlich → bei Quellenwechsel neue Basis statt falschem Rug-Alarm
+    if (!!m.ds !== !!p.liqDs && m.liq) { p.liq0 = m.liq; p.liqDs = !!m.ds; }
     const ch = (valSol(k, p) / p.cost - 1) * 100;
     p.peak = Math.max(p.peak || 0, ch);
     const mins = (now() - p.ts) / 60000;
@@ -275,13 +353,13 @@ function tick() {
       if (r.s < R.minScore) { log("SKIP", m.sym, `Score ${r.s.toFixed(1)} < ${R.minScore} · ${r.why}`); acted = true; break; }
       if (m.src === "gt") {
         const rc = rug[m.mint];
-        if (!rc) { requestRug(m.mint); log("CHECK", m.sym, "Rug-Check läuft…"); acted = true; break; }
+        if (!rc) { requestRug(m.mint, m.pool); log("CHECK", m.sym, "Rug-Check läuft…"); acted = true; break; }
         if (rc.pending) { acted = true; break; }
         if (rc.fail) {
           if (CFG.rug && !fallbackOk(m)) { S.cool[m.key] = now(); log("SKIP", m.sym, "Rug-Check nicht erreichbar – zu neu/zu wenig Liquidität"); continue; }
         } else if (rc.reject || rc.score > R.maxRug) {
           S.cool[m.key] = now(); S.rugsAvoided++;
-          log("RUG", m.sym, `🛡️ blockiert (${rc.score}/100): ${rc.reasons[0] || "zu riskant"}`); acted = true; continue;
+          log("RUG", m.sym, `🛡️ blockiert (${rc.score}/100): ${rc.hard[0] || rc.reasons[0] || "zu riskant"}`); acted = true; continue;
         }
         buy(m, `Score ${r.s.toFixed(1)} · ${r.why}`, rc.fail ? null : rc); acted = true; break;
       }
@@ -295,7 +373,7 @@ function tick() {
 }
 
 // ---------- Fokus: Top-Trade-Chart (TradingView Lightweight Charts) ----------
-let tv = null, series = null, lines = [], chartKey = null, lastOhlc = 0;
+let tv = null, series = null, lines = [], chartKey = null, lastOhlc = 0, ohlcBusy = null;
 function pickFocus() {
   if (focusSel && (S.pos[focusSel] || mk[focusSel])) return focusSel;
   const pe = Object.entries(S.pos);
@@ -313,9 +391,12 @@ function localBars(k) {
   return Object.values(by);
 }
 async function loadOhlc(force) {
-  const k = focusKey; if (!k) return;
-  if (!force && k === chartKey && now() - lastOhlc < 20000) return;
-  lastOhlc = now();
+  const k = focusKey; if (!k || ohlcBusy) return; // nie mehrere Chart-Abrufe gleichzeitig
+  if (k === chartKey && now() - lastOhlc < (force ? 5000 : 20000)) return;
+  ohlcBusy = k; lastOhlc = now();
+  try { await loadOhlcFor(k); } finally { ohlcBusy = null; chartKey ||= k; }
+}
+async function loadOhlcFor(k) {
   let bars = [];
   if (k.startsWith("gt:")) {
     try {
@@ -324,7 +405,8 @@ async function loadOhlc(force) {
       bars = (d.data?.attributes?.ohlcv_list || []).map((x) => ({ time: x[0], open: +x[1], high: +x[2], low: +x[3], close: +x[4] }));
     } catch { bars = localBars(k); } // Ersatz: Kerzen aus selbst gesammelten Preisen
   } else {
-    const d = await getJSON(`${CG}/coins/${k.slice(3)}/ohlc?vs_currency=usd&days=1`);
+    let d = [];
+    try { d = await getJSON(`${CG}/coins/${k.slice(3)}/ohlc?vs_currency=usd&days=1`); } catch { d = []; }
     bars = d.map((x) => ({ time: Math.floor(x[0] / 1000), open: x[1], high: x[2], low: x[3], close: x[4] }));
   }
   const seen = new Set();
@@ -333,7 +415,7 @@ async function loadOhlc(force) {
 }
 function drawChart(k, bars) {
   const el = $("tv");
-  if (!bars.length) { el.innerHTML = "<div class='mut tiny' style='padding:20px'>Noch keine Chartdaten.</div>"; tv = null; return; }
+  if (!bars.length) { el.innerHTML = "<div class='mut tiny' style='padding:20px'>Noch keine Chartdaten.</div>"; tv = null; chartKey = k; return; }
   const p = S.pos[k], last = bars[bars.length - 1].close;
   const dec = Math.min(12, Math.max(2, Math.ceil(-Math.log10(last)) + 3));
   if (!window.LightweightCharts) { // Ersatz: einfache Linie
@@ -368,26 +450,70 @@ function drawChart(k, bars) {
   chartKey = k;
 }
 
-// ---------- Bubble-Map ----------
-function bubbles(rc) {
+// ---------- Bubble-Map (wie Bubblemaps: Cluster-Ringe um die gemeinsame Funding-Quelle) ----------
+const CL_COL = ["#ff4d6d", "#ffa23e", "#ffd43b", "#14f195", "#4dd4ff", "#e64dff", "#ff8fab", "#a3e635"];
+const short = (a) => (a && a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a || "?");
+let bubbleNodes = [];
+function bubbleMsg(svg, txt) { svg.setAttribute("viewBox", "0 0 400 260"); svg.innerHTML = `<text x="200" y="130" text-anchor="middle" fill="#7d869b" font-size="12">${esc(txt)}</text>`; svg.dataset.k = ""; $("bubble-info").textContent = ""; $("clusters").innerHTML = ""; }
+function bubbles(rc, mint) {
   const svg = $("bubbles");
-  if (!rc || !rc.holders?.length) { svg.innerHTML = `<text x="200" y="130" text-anchor="middle" fill="#7d869b" font-size="12">${rc?.pending ? "Holder werden geladen…" : rc?.fail ? "RugCheck nicht erreichbar – keine Holder-Daten" : "Keine Holder-Daten (nur bei neuen Solana-Coins)"}</text>`; return; }
-  const hs = rc.holders.slice(0, 30).map((h) => ({ ...h, r: Math.max(5, Math.sqrt(h.pct) * 13) }));
-  const placed = [];
-  for (const h of hs.sort((a, b) => b.r - a.r)) { // Spirale mit Kollisionsprüfung
-    for (let i = 0; i < 2000; i++) {
-      const a = i * 0.35, d = i * 0.9, x = 200 + Math.cos(a) * d, y = 130 + Math.sin(a) * d * 0.62;
-      if (x - h.r < 2 || x + h.r > 398 || y - h.r < 2 || y + h.r > 258) continue;
-      if (placed.every((o) => Math.hypot(o.x - x, o.y - y) > o.r + h.r + 2)) { h.x = x; h.y = y; placed.push(h); break; }
+  if (!rc || !rc.holders?.length) return bubbleMsg(svg, rc?.pending ? "Holder werden geladen…" : rc?.fail ? "RugCheck nicht erreichbar – keine Holder-Daten" : "Keine Holder-Daten (nur bei neuen Solana-Coins)");
+  const key = mint + ":" + rc.t + ":" + CFG.risk;
+  if (svg.dataset.k === key) return; // Layout nur neu rechnen, wenn sich die Daten ändern
+  svg.dataset.k = key;
+  // Knoten: Cluster-Wallets (aus dem Insider-Graph) + lose Top-Holder
+  const nodes = [], byId = {}, links = [];
+  const add = (n) => { if (byId[n.id]) return byId[n.id]; byId[n.id] = n; nodes.push(n); return n; };
+  const hold = {}; rc.holders.forEach((h) => (hold[h.addr] = h));
+  const shown = rc.clusters.filter((c) => c.members.length).slice(0, CL_COL.length);
+  shown.forEach((c, ci) => {
+    const keep = new Set([...c.members].sort((a, b) => b.pct - a.pct).slice(0, 45).map((m) => m.id));
+    if (c.hub) keep.add(c.hub);
+    for (const m of c.members) if (keep.has(m.id)) add({ id: m.id, pct: m.pct, cl: ci, hub: m.id === c.hub, h: hold[m.id] });
+    if (c.hub && !byId[c.hub]) add({ id: c.hub, pct: 0, cl: ci, hub: true });
+    for (const l of c.links) if (keep.has(l.source) && keep.has(l.target) && byId[l.source]?.cl === ci && byId[l.target]?.cl === ci) links.push({ source: l.source, target: l.target, cl: ci });
+  });
+  for (const h of rc.holders.slice(0, 30)) { const n = byId[h.addr]; if (n) { n.h = h; n.pct = Math.max(n.pct, h.pct); } else add({ id: h.addr, pct: h.pct, cl: null, h }); }
+  nodes.forEach((n) => (n.r = n.hub && n.pct < 0.05 ? 4.5 : Math.max(n.cl != null ? 3 : 4, Math.sqrt(n.pct) * 9)));
+  const col = (n) => (n.h?.lp ? "#4da3ff" : n.cl != null ? CL_COL[n.cl] : n.h?.dev ? "#ffa23e" : n.h?.insider ? "#ff4d6d" : "#9945ff");
+  // Layout
+  if (window.d3?.forceSimulation) {
+    const sizeOf = shown.map((c) => Math.min(c.members.length, 45));
+    const sim = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links).id((d) => d.id).distance((l) => 14 + Math.sqrt(sizeOf[l.cl] || 1) * 6).strength(0.8))
+      .force("charge", d3.forceManyBody().strength((d) => (d.cl != null ? -14 : -40)))
+      .force("collide", d3.forceCollide((d) => d.r + 1.5).iterations(2))
+      .force("x", d3.forceX(0).strength(0.05)).force("y", d3.forceY(0).strength(0.08)).stop();
+    for (let i = 0; i < 320; i++) sim.tick();
+  } else { // Ersatz ohne d3: Spirale
+    let i = 0;
+    for (const n of [...nodes].sort((a, b) => b.r - a.r)) {
+      for (; i < 4000; i++) { const a = i * 0.35, d = i * 0.5, x = Math.cos(a) * d, y = Math.sin(a) * d; if (nodes.every((o) => o === n || o.x == null || Math.hypot(o.x - x, o.y - y) > o.r + n.r + 2)) { n.x = x; n.y = y; break; } }
     }
   }
-  const col = (h) => (h.lp ? "#4da3ff" : h.insider ? "#ff4d6d" : h.dev ? "#ffa23e" : "#9945ff");
-  const ins = placed.filter((h) => h.insider);
-  const links = ins.flatMap((a, i) => ins.slice(i + 1).map((b) => `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#ff4d6d" stroke-opacity=".35"/>`)).join("");
-  svg.innerHTML = links + placed.map((h) => `<g><title>${esc(h.addr)} · ${h.pct.toFixed(2)}%${h.lp ? " (Pool/LP)" : h.insider ? " (Insider)" : h.dev ? " (Dev)" : ""}</title>
-    <circle cx="${h.x}" cy="${h.y}" r="${h.r}" fill="${col(h)}" fill-opacity=".28" stroke="${col(h)}" stroke-width="1.5"/>
-    ${h.r > 13 ? `<text x="${h.x}" y="${h.y + 4}" text-anchor="middle" fill="#eef1f7" font-size="${Math.min(13, h.r / 2.2)}" font-weight="600">${h.pct.toFixed(1)}%</text>` : ""}</g>`).join("");
+  const x0 = Math.min(...nodes.map((n) => n.x - n.r)) - 8, x1 = Math.max(...nodes.map((n) => n.x + n.r)) + 8;
+  const y0 = Math.min(...nodes.map((n) => n.y - n.r)) - 8, y1 = Math.max(...nodes.map((n) => n.y + n.r)) + 8;
+  svg.setAttribute("viewBox", `${x0.toFixed(1)} ${y0.toFixed(1)} ${(x1 - x0).toFixed(1)} ${(y1 - y0).toFixed(1)}`);
+  const sc = (x1 - x0) / 400; // Linien/Schrift mit dem Zoom skalieren
+  const defs = CL_COL.map((c, i) => `<marker id="ar${i}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0L10,5L0,10z" fill="${c}"/></marker>`).join("");
+  const lines = links.map((l) => {
+    const a = l.source, b = l.target, d = Math.hypot(b.x - a.x, b.y - a.y) || 1, ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+    return `<line x1="${(a.x + ux * a.r).toFixed(1)}" y1="${(a.y + uy * a.r).toFixed(1)}" x2="${(b.x - ux * (b.r + 1)).toFixed(1)}" y2="${(b.y - uy * (b.r + 1)).toFixed(1)}" stroke="${CL_COL[l.cl]}" stroke-opacity=".55" stroke-width="${(0.9 * sc).toFixed(2)}" marker-end="url(#ar${l.cl})"/>`;
+  }).join("");
+  bubbleNodes = nodes;
+  svg.innerHTML = `<defs>${defs}</defs>${lines}` + nodes.map((n, i) => `<g data-i="${i}" style="cursor:pointer"><title>${esc(short(n.id))} · ${n.pct.toFixed(2)}%${n.hub ? " · Funding-Quelle" : ""}</title>
+    <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${n.r.toFixed(1)}" fill="${col(n)}" fill-opacity="${n.hub ? 0.9 : 0.3}" stroke="${n.hub ? "#eef1f7" : col(n)}" stroke-width="${((n.hub ? 1.6 : 1.2) * sc).toFixed(2)}"/>
+    ${n.r > 13 * sc ? `<text x="${n.x.toFixed(1)}" y="${(n.y + n.r * 0.3).toFixed(1)}" text-anchor="middle" fill="#eef1f7" font-size="${Math.min(13 * sc, n.r / 2.2).toFixed(1)}" font-weight="600" pointer-events="none">${n.pct.toFixed(1)}%</text>` : ""}</g>`).join("");
+  $("bubble-info").textContent = shown.length ? "Tippe eine Bubble an. Pfeile = Token-Überweisungen von der Quelle an die Wallets." : rc.clusters.length ? "Cluster laut RugCheck – Graph-Details nicht verfügbar." : "Keine Cluster erkannt – nur lose Holder.";
+  $("clusters").innerHTML = rc.clusters.slice(0, 6).map((c, i) => `<div class="row"><span><i class="dot" style="background:${i < shown.length ? CL_COL[i] : "#7d869b"}"></i>${c.type === "trade" ? "Handels-Netzwerk" : "Cluster"} · ${c.size} Wallets${c.hub ? ` · Quelle ${esc(short(c.hub))}` : ""}</span><b class="${c.pct >= P().clMax ? "down" : c.pct >= P().clMax / 2 ? "warn-t" : "mut"}">${c.pct.toFixed(1)}%</b></div>`).join("")
+    + (rc.notes || []).map((t) => `<div class="mut tiny">ℹ️ ${esc(t)}</div>`).join("");
 }
+$("bubbles").onclick = (e) => {
+  const g = e.target.closest("g[data-i]"); if (!g) return;
+  const n = bubbleNodes[+g.dataset.i]; if (!n) return;
+  const role = n.h?.lp ? "Pool/LP" : n.hub ? `Funding-Quelle von Cluster ${n.cl + 1}` : n.cl != null ? `Cluster ${n.cl + 1}` : n.h?.dev ? "Dev" : n.h?.insider ? "Insider" : "Holder";
+  $("bubble-info").innerHTML = `<b>${esc(short(n.id))}</b> · ${role} · ${n.pct.toFixed(2)}% · <a href="https://solscan.io/account/${esc(n.id)}" target="_blank" rel="noopener">Solscan</a>`;
+};
 
 // ---------- Anzeige ----------
 function equityChart() {
@@ -453,9 +579,9 @@ function render() {
     const pool = fp?.pool || fm?.pool, mint = fp?.mint || fm?.mint;
     $("focus-links").innerHTML = pool ? `<a href="https://www.geckoterminal.com/solana/pools/${esc(pool)}" target="_blank" rel="noopener">📊 GeckoTerminal</a><a href="https://dexscreener.com/solana/${esc(pool)}" target="_blank" rel="noopener">📈 DexScreener</a>`
       : `<a href="https://www.coingecko.com/en/coins/${esc(fk.slice(3))}" target="_blank" rel="noopener">📊 CoinGecko</a><a href="https://www.tradingview.com/symbols/${esc(sym)}USD/" target="_blank" rel="noopener">📈 TradingView</a>`;
-    if (fk !== chartKey) safe("Chart", () => loadOhlc(true));
+    if (fk !== chartKey && !ohlcBusy) safe("Chart", () => loadOhlc(true));
     // Rug-Panel für den Fokus-Coin
-    if (mint && !rug[mint]) requestRug(mint);
+    if (mint && !rug[mint]) requestRug(mint, pool);
     renderRug(mint, sym);
   } else {
     $("focus-info").innerHTML = "<div class='mut'>Warte auf Marktdaten…</div>"; renderRug(null);
@@ -465,7 +591,7 @@ function render() {
   $("agents").innerHTML = [
     ["scanner", "SCANNER", `${nCg + nGt} Coins im Blick · ${nNew} neue Pools`],
     ["safety", "SAFETY", `Liq ≥ $${big(R.minLiq)} · Pool ≥ 3 Min · Kaufdruck · Bot-Volumen`],
-    ["rug", "RUG-CHECK", CFG.rug ? `Mint/Freeze · LP · Top-10 · Insider · max ${R.maxRug}/100` : "aus – nur Basis-Checks"],
+    ["rug", "RUG-CHECK", CFG.rug ? `Mint/Freeze · LP · Top-10 · Cluster ≤ ${R.clMax}% · Bundles · max ${R.maxRug}/100` : "aus – nur Basis-Checks"],
     ["analyst", "ANALYST", `Momentum 5m/1h · Score ≥ ${R.minScore}`],
     ["risk", "RISK", `${R.size * 100}% pro Trade · Stop −${R.sl}% · Trailing ${R.trail}%`],
     ["executor", "EXECUTOR", `${pe.length}/${R.maxPos} Positionen · Gebühren ${sol(S.fees || 0, 3)} SOL`],
@@ -477,7 +603,7 @@ function render() {
 
   // Entscheidungen
   const cls = { BUY: "buy", SELL: "sell", RUG: "down", CHECK: "a-rug" };
-  $("log").innerHTML = S.log.slice(0, 10).map((l) => `<div class="row"><span class="mut tiny">${l.t}</span><span class="${cls[l.type] || "skip"}" style="width:46px;font-size:12px">${l.type}</span><span class="txt">${esc(l.sym)} · ${esc(l.text)}</span></div>`).join("") || "<div class='mut'>Warte auf Marktdaten…</div>";
+  $("log").innerHTML = S.log.slice(0, 10).map((l) => `<div class="row"><span class="mut tiny">${l.t}</span><span class="${cls[l.type] || "skip"}" style="width:46px;font-size:12px">${l.type}</span><span class="txt">${esc(l.sym)} · ${esc(l.text)}${l.n > 1 ? ` <span class="mut tiny">×${l.n}</span>` : ""}</span></div>`).join("") || "<div class='mut'>Warte auf Marktdaten…</div>";
 
   // Quellen
   const SRC = [["Scanner", "GeckoTerminal + CoinGecko"], ["Analyse", "Safety · Analyst · Risk"], ["RugCheck", "Holder · LP · Authorities"], ["Executor", "Paper-Trades"]];
@@ -500,8 +626,8 @@ function renderRug(mint, sym) {
   const links = $("rug-links"), v = $("rug-verdict");
   links.innerHTML = mint ? `<a href="https://rugcheck.xyz/tokens/${esc(mint)}" target="_blank" rel="noopener">🛡️ RugCheck</a><a href="https://app.bubblemaps.io/sol/token/${esc(mint)}" target="_blank" rel="noopener">🫧 Bubblemaps</a><a href="https://solscan.io/token/${esc(mint)}" target="_blank" rel="noopener">🔍 Solscan</a>` : "";
   if (!mint) { v.innerHTML = ""; $("rug").innerHTML = "<div class='mut tiny'>Rug-Check gibt es nur für Solana-Coins. Etablierte Coins (z. B. DOGE) werden nicht geprüft.</div>"; bubbles(null); return; }
-  if (!rc || rc.pending) { v.innerHTML = '<span class="chip warn">PRÜFE…</span>'; $("rug").innerHTML = `<div class='mut tiny'>${esc(sym)} wird geprüft…</div>`; bubbles(rc || { pending: true }); return; }
-  if (rc.fail) { v.innerHTML = '<span class="chip warn">N/A</span>'; $("rug").innerHTML = "<div class='mut tiny'>RugCheck nicht erreichbar. Der Bot kauft dann nur Pools, die älter als 60 Min sind und ≥ $50K Liquidität haben.</div>"; bubbles(rc); return; }
+  if (!rc || rc.pending) { v.innerHTML = '<span class="chip warn">PRÜFE…</span>'; $("rug").innerHTML = `<div class='mut tiny'>${esc(sym)} wird geprüft…</div>`; bubbles(rc || { pending: true }, mint); return; }
+  if (rc.fail) { v.innerHTML = '<span class="chip warn">N/A</span>'; $("rug").innerHTML = "<div class='mut tiny'>RugCheck nicht erreichbar. Der Bot kauft dann nur Pools, die älter als 60 Min sind und ≥ $50K Liquidität haben.</div>"; bubbles(rc, mint); return; }
   const ok = !rc.reject && rc.score <= P().maxRug;
   v.innerHTML = `<span class="chip ${ok ? (rc.score <= 20 ? "ok" : "warn") : "bad"}">${ok ? "BESTANDEN" : "BLOCKIERT"} · ${rc.score}/100</span>`;
   const c = (good, txt) => `<span class="${good ? "up" : "down"}">${txt}</span>`;
@@ -509,13 +635,15 @@ function renderRug(mint, sym) {
     <div class="checks">
       <div><span class="mut">Mint</span>${c(!rc.reasons.some((x) => x.startsWith("Mint")), rc.reasons.some((x) => x.startsWith("Mint")) ? "aktiv ✗" : "gesperrt ✓")}</div>
       <div><span class="mut">Freeze</span>${c(!rc.reasons.some((x) => x.startsWith("Freeze")), rc.reasons.some((x) => x.startsWith("Freeze")) ? "aktiv ✗" : "gesperrt ✓")}</div>
-      <div><span class="mut">LP gesperrt</span>${c(rc.lp >= 80, rc.lp.toFixed(0) + "%")}</div>
+      <div><span class="mut">LP gesperrt</span>${rc.clmm ? `<span class="mut">n/a (${esc(rc.lpType)})</span>` : c(rc.lp >= 80, rc.lp.toFixed(0) + "%")}</div>
       <div><span class="mut">Top-10</span>${c(rc.top10 <= 25, rc.top10.toFixed(1) + "%")}</div>
       <div><span class="mut">Größter Holder</span>${c(rc.top1 <= 8, rc.top1.toFixed(1) + "%")}</div>
       <div><span class="mut">Insider</span>${c(rc.ins <= 8, rc.ins.toFixed(1) + "%")}</div>
+      <div><span class="mut">Größter Cluster</span>${c(rc.clTop < P().clMax / 2, rc.clusters.length ? `${rc.clTop.toFixed(1)}% (${rc.clusters[0].size} W.)` : "keiner")}</div>
+      <div><span class="mut">Bundle/Sniper</span>${c(!rc.bundle, rc.bundle ? `${rc.bundle.fan} Wallets ✗` : "nein ✓")}</div>
     </div>
     ${rc.reasons.length ? `<div class="tiny down">⚠ ${rc.reasons.map(esc).join(" · ")}</div>` : `<div class="tiny up">✓ ${rc.ok.map(esc).join(" · ")}</div>`}`;
-  bubbles(rc);
+  bubbles(rc, mint);
 }
 
 // ---------- Bedienung ----------
@@ -525,7 +653,7 @@ $("reset").onclick = () => {
   if (b.dataset.armed) { S = fresh(); focusSel = null; save(); delete b.dataset.armed; b.textContent = "Zurücksetzen"; render(); }
   else { b.dataset.armed = 1; b.textContent = "Sicher? Nochmal tippen"; setTimeout(() => { delete b.dataset.armed; b.textContent = "Zurücksetzen"; }, 4000); }
 };
-document.querySelectorAll("#risk button").forEach((b) => (b.onclick = () => { CFG.risk = b.dataset.r; save(); render(); }));
+document.querySelectorAll("#risk button").forEach((b) => (b.onclick = () => { CFG.risk = b.dataset.r; reanalyse(); save(); render(); }));
 $("c-neu").onchange = (e) => { CFG.neu = e.target.checked; save(); render(); };
 $("c-et").onchange = (e) => { CFG.etabliert = e.target.checked; save(); render(); };
 $("c-rug").onchange = (e) => { CFG.rug = e.target.checked; save(); render(); };
