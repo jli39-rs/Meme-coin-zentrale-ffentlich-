@@ -1,0 +1,24 @@
+:root { color-scheme: dark; --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --fg:#e8eaf0; --mut:#8b93a5; --up:#2ecc71; --down:#e74c3c; --acc:#f5c542; }
+* { box-sizing: border-box; }
+body { margin:0; font:15px system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); }
+header { display:flex; flex-wrap:wrap; gap:16px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); }
+h1 { font-size:20px; margin:0; }
+nav { display:flex; gap:6px; flex:1; }
+button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; }
+button:hover { border-color:var(--acc); }
+nav .active { background:var(--acc); color:#000; border-color:var(--acc); }
+main { padding:20px; max-width:1100px; margin:auto; }
+table { width:100%; border-collapse:collapse; background:var(--card); border-radius:8px; overflow:hidden; }
+th,td { padding:9px 12px; text-align:right; border-bottom:1px solid var(--line); }
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2) { text-align:left; }
+.up { color:var(--up); } .down { color:var(--down); } .mut { color:var(--mut); }
+.star { cursor:pointer; background:none; border:none; font-size:16px; padding:0; }
+img.ic { width:20px; height:20px; vertical-align:middle; margin-right:6px; border-radius:50%; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.card b { display:block; font-size:20px; margin-top:4px; }
+input { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; width:110px; }
+select { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px; }
+form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+footer { text-align:center; color:var(--mut); padding:20px; font-size:13px; }
+h2 { margin:20px 0 10px; font-size:17px; }

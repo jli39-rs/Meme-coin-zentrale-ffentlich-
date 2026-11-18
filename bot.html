@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Bot – Paper Trading</title>
+  <link rel="stylesheet" href="src/bot.css">
+</head>
+<body>
+<div class="phone">
+  <div class="top">
+    <div class="brand"><div class="logo">C</div><b>Claude Bot</b><span class="pill" id="mode">paper mode</span></div>
+    <span class="pill live" id="live">● Live</span>
+  </div>
+  <div class="sub" id="sub">3 Quellen · 5 Agenten</div>
+
+  <div class="value"><span id="val">$100.00</span><span class="delta" id="delta">+$0</span></div>
+  <div class="meta"><span>Start <b id="start">$100</b> · <span id="trades">0</span> Trades</span><span class="badge" id="mult">1.00×</span></div>
+  <div class="meta"><span id="wl" class="up">+$0.00 · 0W 0L</span><span id="clock" class="mut"></span></div>
+  <svg id="chart" viewBox="0 0 400 110" preserveAspectRatio="none"></svg>
+
+  <div class="box" id="repos"></div>
+
+  <div class="box">
+    <div class="head"><b>Agenten</b><span class="up" id="running">5 aktiv</span></div>
+    <div id="agents"></div>
+  </div>
+
+  <div class="box">
+    <div class="head"><b>Claude Core · Entscheidungen</b><span class="up">streaming</span></div>
+    <div id="log"></div>
+  </div>
+
+  <div class="actions">
+    <button id="toggle">⏸ Pause</button>
+    <button id="reset">Zurücksetzen</button>
+    <a href="index.html">← Zentrale</a>
+  </div>
+  <p class="note">Reine Simulation mit virtuellem Geld. Kein Wallet, kein echter Handel, keine Finanzberatung.</p>
+</div>
+<script src="src/bot.js"></script>
+</body>
+</html>

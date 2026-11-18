@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meme Coins Zentrale</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <header>
+    <h1>🐸 Meme Coins Zentrale</h1>
+    <nav>
+      <button data-tab="market" class="active">Kurse</button>
+      <button data-tab="watchlist">Watchlist</button>
+      <button data-tab="trending">Trends</button>
+      <button data-tab="paper">Paper Trading</button>
+      <a href="bot.html" style="color:var(--acc);align-self:center;margin-left:8px">🤖 Claude Bot</a>
+    </nav>
+    <span id="status"></span>
+  </header>
+  <main>
+    <section id="market"></section>
+    <section id="watchlist" hidden></section>
+    <section id="trending" hidden></section>
+    <section id="paper" hidden></section>
+  </main>
+  <footer>Nur Simulation (Paper Trading) – keine Finanzberatung. Daten: CoinGecko.</footer>
+  <script src="src/app.js"></script>
+</body>
+</html>
