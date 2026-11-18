@@ -1,10 +1,10 @@
 // Claude Bot – reine Paper-Trading-Simulation mit Live-Preisen von CoinGecko.
 const API = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=meme-token&order=market_cap_desc&per_page=50&page=1&price_change_percentage=1h,24h";
-const START = 100, TICK_MS = 6000, REFRESH_MS = 45000;
+const START = 100, TICK_MS = 6000, REFRESH_MS = 30000;
 const $ = (id) => document.getElementById(id);
 const usd = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const fresh = () => ({ cash: START, pos: {}, hist: [START], trades: 0, wins: 0, losses: 0, log: [], calls: [0, 0, 0], since: Date.now() });
+const fresh = () => ({ cash: START, pos: {}, hist: [START], trades: 0, wins: 0, losses: 0, log: [], calls: [0, 0, 0], tr: [], since: Date.now() });
 let S = JSON.parse(localStorage.getItem("claudebot") || "null") || fresh();
 let coins = [], paused = false;
 const save = () => localStorage.setItem("claudebot", JSON.stringify(S));
@@ -17,6 +17,13 @@ function log(type, sym, text) {
   S.log.unshift({ t: new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }), type, sym, text });
   S.log = S.log.slice(0, 40);
 }
+
+function rec(side, sym, p, qty, amt, pnl) {
+  S.tr = S.tr || [];
+  S.tr.unshift({ ts: Date.now(), side, sym, p, qty, amt, pnl });
+  S.tr = S.tr.slice(0, 50);
+}
+const fmtP = (n) => "$" + (n >= 1 ? n.toFixed(2) : n.toPrecision(3));
 
 // Ein Entscheidungszyklus: Scanner -> Safety -> Analyst -> Risk -> Executor
 function tick() {
@@ -31,6 +38,7 @@ function tick() {
       const pnl = now * p.qty - p.cost;
       S.cash += now * p.qty; delete S.pos[id]; S.trades++;
       pnl >= 0 ? S.wins++ : S.losses++;
+      rec("SELL", p.sym, now, p.qty, now * p.qty, pnl);
       log("SELL", p.sym, `${pnl >= 0 ? "+" : "-"}$${Math.abs(pnl).toFixed(2)} · ${chg >= 0 ? "Take-Profit" : "Stop -8%"}`);
       S.calls[2]++; return finish();
     }
@@ -51,6 +59,7 @@ function tick() {
   if (size < 1) { log("SKIP", sym, "Risk: kein Cash frei"); return finish(); }
   S.cash -= size; S.pos[c.id] = { sym, qty: size / c.current_price, cost: size };
   S.trades++; S.calls[1]++; S.calls[2]++;
+  rec("BUY", sym, c.current_price, S.pos[c.id].qty, size, null);
   log("BUY", sym, `bull ${bull}/bear ${bear} · ${usd(size)}`);
   finish();
 }
@@ -86,6 +95,10 @@ function render() {
     ["executor", "EXECUTOR", `${open.length} offene Positionen`],
   ].map((a) => `<div class="row"><span class="tag a-${a[0]}">${a[1]}</span><span class="txt">${esc(a[2])}</span></div>`).join("");
   $("log").innerHTML = S.log.slice(0, 8).map((l) => `<div class="row"><span class="mut">${l.t}</span><span class="${l.type === "BUY" ? "buy" : l.type === "SELL" ? "sell" : "mut"}">${l.type}</span><span class="txt">${esc(l.sym)} · ${esc(l.text)}</span></div>`).join("") || "<div class='mut'>Warte auf Marktdaten…</div>";
+  $("ticker").innerHTML = coins.slice(0, 15).map((c) => { const d = c.price_change_percentage_24h ?? 0; return `<span>${esc(c.symbol.toUpperCase())} ${fmtP(c.current_price)} <i class="${d >= 0 ? "up" : "down"}">${d >= 0 ? "+" : ""}${d.toFixed(1)}%</i></span>`; }).join("");
+  const tr = S.tr || [];
+  $("tcount").textContent = tr.length + " Trades";
+  $("trades-live").innerHTML = tr.slice(0, 12).map((x, i) => `<div class="row trade${i === 0 && Date.now() - x.ts < 8000 ? " new" : ""}"><span class="mut">${new Date(x.ts).toLocaleTimeString("de-DE")}</span><span class="${x.side === "BUY" ? "buy" : "sell"}">${x.side}</span><span class="txt">${esc(x.sym)} @ ${fmtP(x.p)} · ${usd(x.amt)}${x.pnl == null ? "" : ` · <b class="${x.pnl >= 0 ? "up" : "down"}">${x.pnl >= 0 ? "+" : "-"}$${Math.abs(x.pnl).toFixed(2)}</b>`}</span></div>`).join("") || "<div class='mut'>Noch keine Trades – der Bot sucht Einstiege…</div>";
   $("live").textContent = paused ? "⏸ Pause" : "● Live";
   chart();
 }

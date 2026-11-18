@@ -27,3 +27,8 @@ Kein echter Handel, keine Finanzberatung.
 
 ## Claude Bot (`bot.html`)
 Handy-Layout mit Agenten-Ansicht (Scanner → Safety → Analyst → Risk → Executor), Kurve und Entscheidungs-Stream. Handelt automatisch mit **virtuellen 100 $** auf Basis der Live-Preise. Öffnen: http://localhost:8080/bot.html (oder Link in der Zentrale). Kein Wallet, kein echter Handel.
+
+## Zugangscode
+Beide Seiten fragen beim ersten Öffnen nach einem Code (`src/gate.js`). Im Repo steht nur ein Hash (`src/gate-config.js`), nicht der Code selbst.
+Das ist eine einfache Schranke im Browser, **kein echter Schutz**: Wer den Code der Seite liest, kann sie umgehen. Es liegen aber keine Geheimnisse darin.
+Neuen Code setzen: Hash mit `node` erzeugen (PBKDF2-SHA256, 200000 Runden, 16-Byte-Salt) und in `src/gate-config.js` eintragen.

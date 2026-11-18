@@ -14,6 +14,8 @@
   </div>
   <div class="sub" id="sub">3 Quellen · 5 Agenten</div>
 
+  <div class="ticker" id="ticker"></div>
+
   <div class="value"><span id="val">$100.00</span><span class="delta" id="delta">+$0</span></div>
   <div class="meta"><span>Start <b id="start">$100</b> · <span id="trades">0</span> Trades</span><span class="badge" id="mult">1.00×</span></div>
   <div class="meta"><span id="wl" class="up">+$0.00 · 0W 0L</span><span id="clock" class="mut"></span></div>
@@ -24,6 +26,11 @@
   <div class="box">
     <div class="head"><b>Agenten</b><span class="up" id="running">5 aktiv</span></div>
     <div id="agents"></div>
+  </div>
+
+  <div class="box">
+    <div class="head"><b>Live-Trades</b><span class="up" id="tcount">0</span></div>
+    <div id="trades-live"></div>
   </div>
 
   <div class="box">
@@ -38,6 +45,7 @@
   </div>
   <p class="note">Reine Simulation mit virtuellem Geld. Kein Wallet, kein echter Handel, keine Finanzberatung.</p>
 </div>
-<script src="src/bot.js"></script>
+<script src="src/gate-config.js"></script>
+<script src="src/gate.js" data-app="src/bot.js"></script>
 </body>
 </html>

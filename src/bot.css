@@ -27,3 +27,11 @@ button { background:#111; color:#fff; border:0; border-radius:10px; padding:10px
 button#reset { background:var(--bg); color:#111; }
 .actions a { color:var(--mut); margin-left:auto; text-decoration:none; }
 .note { color:var(--mut); font-size:12px; text-align:center; }
+html.locked body > :not(#gate):not(script) { display:none !important; }
+#gate { position:fixed; inset:0; background:#f4f5f7; display:grid; place-items:center; z-index:99; }
+#gate form { background:#fff; padding:28px; border-radius:14px; display:flex; flex-direction:column; gap:12px; width:min(320px,90vw); box-shadow:0 4px 24px rgba(0,0,0,.1); }
+#gate h2 { margin:0; } #gate input { width:100%; padding:10px; font-size:16px; border:1px solid var(--line); border-radius:8px; } #gate p { color:var(--down); margin:0; min-height:1em; }
+.ticker { display:flex; gap:14px; overflow-x:auto; white-space:nowrap; padding:6px 0; margin:6px 0; font-size:12px; border-bottom:1px solid var(--line); scrollbar-width:none; }
+.ticker i { font-style:normal; font-weight:600; }
+.row.trade.new { background:#eef6ff; animation:flash 2s ease-out; border-radius:6px; }
+@keyframes flash { from { background:#cfe3ff; } to { background:#eef6ff; } }

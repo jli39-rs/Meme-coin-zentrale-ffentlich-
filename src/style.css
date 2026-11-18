@@ -22,3 +22,7 @@ select { background:var(--bg); color:var(--fg); border:1px solid var(--line); bo
 form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
 footer { text-align:center; color:var(--mut); padding:20px; font-size:13px; }
 h2 { margin:20px 0 10px; font-size:17px; }
+html.locked body > :not(#gate):not(script) { display:none !important; }
+#gate { position:fixed; inset:0; background:#0f1115; display:grid; place-items:center; z-index:99; }
+#gate form { background:#181b22; padding:28px; border-radius:12px; display:flex; flex-direction:column; gap:12px; width:min(320px,90vw); color:#e8eaf0; }
+#gate h2 { margin:0; } #gate input { width:100%; padding:10px; font-size:16px; } #gate p { color:#e74c3c; margin:0; min-height:1em; }
