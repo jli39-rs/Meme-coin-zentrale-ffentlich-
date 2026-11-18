@@ -26,7 +26,7 @@ Hinweis: Die kostenlose CoinGecko-API hat ein Rate-Limit; bei Fehlermeldung kurz
 Kein echter Handel, keine Finanzberatung.
 
 ## Claude Bot (`bot.html`)
-Handy-Layout mit Agenten-Ansicht (Scanner → Safety → Analyst → Risk → Executor), Kurve und Entscheidungs-Stream. Handelt automatisch mit **virtuellen 100 $** auf Basis der Live-Preise. Öffnen: http://localhost:8080/bot.html (oder Link in der Zentrale). Kein Wallet, kein echter Handel.
+Handy-Layout mit Agenten-Ansicht (Scanner → Safety → Analyst → Risk → Executor), Kurve und Entscheidungs-Stream. Handelt automatisch mit **virtuellen 100 $** auf Basis der Live-Preise. v2: neue & trendende Solana-Coins über GeckoTerminal, Risikostufen (Vorsichtig/Normal/Aggressiv), Trailing-Stop, Zeit-Exit, simulierte Gebühren/Slippage und Statistik. Öffnen: http://localhost:8080/bot.html (oder Link in der Zentrale). Kein Wallet, kein echter Handel.
 
 ## Zugangscode
 Beide Seiten fragen beim ersten Öffnen nach einem Code (`src/gate.js`). Im Repo steht nur ein Hash (`src/gate-config.js`), nicht der Code selbst.

@@ -9,7 +9,7 @@
 <body>
 <div class="phone">
   <div class="top">
-    <div class="brand"><div class="logo">C</div><b>Claude Bot</b><span class="pill" id="mode">paper mode</span></div>
+    <div class="brand"><div class="logo">C</div><b>Claude Bot</b><span class="pill" id="mode">paper mode · v2</span></div>
     <span class="pill live" id="live">● Live</span>
   </div>
   <div class="sub" id="sub">3 Quellen · 5 Agenten</div>
@@ -20,6 +20,16 @@
   <div class="meta"><span>Start <b id="start">$100</b> · <span id="trades">0</span> Trades</span><span class="badge" id="mult">1.00×</span></div>
   <div class="meta"><span id="wl" class="up">+$0.00 · 0W 0L</span><span id="clock" class="mut"></span></div>
   <svg id="chart" viewBox="0 0 400 110" preserveAspectRatio="none"></svg>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="box">
+    <div class="head"><b>Einstellungen</b><span class="mut small">wirkt auf neue Trades</span></div>
+    <div class="seg" id="risk"><button data-r="vorsichtig">Vorsichtig</button><button data-r="normal">Normal</button><button data-r="aggressiv">Aggressiv</button></div>
+    <label class="chk"><input type="checkbox" id="c-neu"> 🆕 Neue &amp; trendende Coins (Solana · GeckoTerminal)</label>
+    <label class="chk"><input type="checkbox" id="c-et"> Etablierte Meme Coins (CoinGecko)</label>
+    <div class="mut small" id="rinfo"></div>
+  </div>
 
   <div class="box" id="repos"></div>
 
@@ -48,7 +58,7 @@
     <button id="reset">Zurücksetzen</button>
     <a href="index.html">← Zentrale</a>
   </div>
-  <p class="note">Reine Simulation mit virtuellem Geld. Kein Wallet, kein echter Handel, keine Finanzberatung.</p>
+  <p class="note">Reine Simulation mit virtuellem Geld, Gebühren/Slippage werden simuliert (0,3% etabliert · 1% neue Coins). Kein Wallet, kein echter Handel, keine Finanzberatung. Läuft nur, solange die Seite offen ist.</p>
 </div>
 <script src="src/gate-config.js"></script>
 <script src="src/gate.js" data-app="src/bot.js"></script>

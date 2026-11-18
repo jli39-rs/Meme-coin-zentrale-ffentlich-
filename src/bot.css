@@ -43,3 +43,14 @@ html.locked body > :not(#gate):not(script) { display:none !important; }
 .bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; margin:4px 0; }
 .bar i { display:block; height:100%; }
 .bar i.g { background:var(--up); } .bar i.r { background:var(--down); }
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:6px 0; }
+.stats div { background:var(--bg); border-radius:10px; padding:8px; font-size:11px; }
+.stats b { display:block; font-size:15px; margin-top:2px; }
+.seg { display:flex; gap:6px; margin:4px 0 8px; }
+.seg button { flex:1; background:var(--bg); color:#111; padding:8px 4px; font-size:13px; }
+.seg button.on { background:#111; color:#fff; }
+.chk { display:flex; gap:8px; align-items:center; font-size:13px; padding:4px 0; }
+.chk input { width:18px; height:18px; }
+.chip { font-size:10px; border-radius:4px; padding:1px 5px; vertical-align:middle; }
+.chip.new { background:#e8f0ff; color:#2f6fed; } .chip.hot { background:#fff1e6; color:#e66a00; }
+.row .txt br + .small { white-space:normal; }
