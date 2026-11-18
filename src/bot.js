@@ -159,7 +159,7 @@ function analyseRug(r) {
   else out.ok.push(`LP ${lp.toFixed(0)}% gesperrt/verbrannt`);
   const creator = r.creator || "";
   out.holders = (r.topHolders || []).map((h) => {
-    const isLp = !!(h.address && marketStr.includes(h.address)) || !!(h.owner && marketStr.includes(h.owner));
+    const inM = (a) => !!a && a.length >= 32 && marketStr.includes(a); const isLp = inM(h.address) || inM(h.owner);
     return { addr: h.owner || h.address || "?", pct: +h.pct || 0, insider: !!h.insider, dev: !!creator && (h.owner === creator || h.address === creator), lp: isLp };
   });
   const real = out.holders.filter((h) => !h.lp);
