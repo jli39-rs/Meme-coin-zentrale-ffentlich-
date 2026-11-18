@@ -4,6 +4,7 @@
 const CG = "https://api.coingecko.com/api/v3";
 const GT = "https://api.geckoterminal.com/api/v2/networks/solana";
 const RC = "https://api.rugcheck.xyz/v1/tokens/";
+const DS = "https://api.dexscreener.com";
 const WSOL = "So11111111111111111111111111111111111111112";
 const START = 5, TICK_MS = 5000, NET_FEE = 0.0005, MIN_TRADE = 0.05; // SOL
 const FEE = { cg: 0.003, gt: 0.01 }; // simulierte DEX-Gebühr + Slippage je Seite
@@ -38,23 +39,45 @@ const save = () => { try { localStorage.setItem("claudebot", JSON.stringify(S));
 const P = () => PRESETS[CFG.risk] || PRESETS.normal;
 
 // ---------- Daten ----------
-async function getJSON(u) { const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
+async function getJSON(u) {
+  let r;
+  try { r = await fetch(u); } catch { throw new Error("blockiert/Limit"); } // Safari: "Load failed" (CORS oder Rate-Limit)
+  if (r.status === 429) throw new Error("Rate-Limit");
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
 async function safe(name, fn) { try { await fn(); delete errs[name]; } catch (e) { errs[name] = e.message || "Fehler"; } render(); }
+// Quellen-Status mit Wartezeit bei Fehlern (exponentielles Backoff)
+const src = { GeckoTerminal: { ok: null, fails: 0, until: 0 }, DexScreener: { ok: null, fails: 0, until: 0 } };
+async function guarded(name, fn) {
+  const s = src[name]; if (now() < s.until) return;
+  try { await fn(); s.ok = true; s.fails = 0; }
+  catch (e) { s.ok = false; s.fails++; s.err = e.message; s.until = now() + Math.min(300000, 15000 * 2 ** (s.fails - 1)); }
+  render();
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Preisverlauf pro Coin (für Ersatz-Chart, falls keine Kerzen verfügbar)
+const ph = {};
+function upsert(x) {
+  mk[x.key] = { ...mk[x.key], ...x };
+  if (x.price) { const a = (ph[x.key] ||= []); if (!a.length || now() - a[a.length - 1].t > 5000) a.push({ t: now(), p: x.price }); if (a.length > 600) a.shift(); }
+}
 
 async function loadSol() {
-  try {
-    const d = await getJSON(`${GT.replace("/networks/solana", "")}/simple/networks/solana/token_price/${WSOL}`);
-    solUsd = +Object.values(d.data.attributes.token_prices)[0];
-  } catch {
-    const d = await getJSON(`${CG}/simple/price?ids=solana&vs_currencies=usd`);
-    solUsd = d.solana.usd;
-  }
+  const tries = [
+    async () => +(await getJSON(`${CG}/simple/price?ids=solana&vs_currencies=usd`)).solana.usd,
+    async () => { const d = await getJSON(`${DS}/latest/dex/tokens/${WSOL}`); return +((d.pairs || []).filter((x) => x.baseToken?.address === WSOL).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]?.priceUsd); },
+    async () => +Object.values((await getJSON(`${GT.replace("/networks/solana", "")}/simple/networks/solana/token_price/${WSOL}`)).data.attributes.token_prices)[0],
+  ];
+  let last;
+  for (const t of tries) { try { const v = await t(); if (v > 0) { solUsd = v; return; } } catch (e) { last = e; } }
+  throw last || new Error("kein SOL-Preis");
 }
 async function loadCG() {
   const d = await getJSON(`${CG}/coins/markets?vs_currency=usd&category=meme-token&order=volume_desc&per_page=100&page=1&price_change_percentage=1h,24h`);
-  for (const c of d) mk["cg:" + c.id] = { ...mk["cg:" + c.id],
+  for (const c of d) upsert({
     key: "cg:" + c.id, src: "cg", sym: c.symbol.toUpperCase(), name: c.name, img: c.image, price: c.current_price,
-    mcap: c.market_cap, vol24: c.total_volume, ch1: c.price_change_percentage_1h_in_currency ?? 0, ch24: c.price_change_percentage_24h ?? 0, t: now() };
+    mcap: c.market_cap, vol24: c.total_volume, ch1: c.price_change_percentage_1h_in_currency ?? 0, ch24: c.price_change_percentage_24h ?? 0, t: now() });
 }
 function gtItems(json, extra = {}) {
   const inc = {};
@@ -72,15 +95,49 @@ function gtItems(json, extra = {}) {
     };
   });
 }
-async function loadGT() {
-  const [n, t] = await Promise.all([getJSON(`${GT}/new_pools?include=base_token`), getJSON(`${GT}/trending_pools?include=base_token`)]);
-  for (const x of [...gtItems(n, { neu: true }), ...gtItems(t, { trend: true })]) mk[x.key] = { ...mk[x.key], ...x };
+async function loadGT() { // nacheinander statt parallel, schont das Rate-Limit
+  const n = await getJSON(`${GT}/new_pools?include=base_token`);
+  gtItems(n, { neu: true }).forEach(upsert);
+  await sleep(1500);
+  const t = await getJSON(`${GT}/trending_pools?include=base_token`);
+  gtItems(t, { trend: true }).forEach(upsert);
+}
+// DexScreener als zweite Quelle (neue Token-Profile + Boosts → beste Solana-Pools)
+function dsItem(x, extra = {}) {
+  const age = x.pairCreatedAt ? (now() - x.pairCreatedAt) / 60000 : null;
+  return {
+    key: "gt:" + x.pairAddress, src: "gt", pool: x.pairAddress, mint: x.baseToken?.address, ds: true,
+    sym: String(x.baseToken?.symbol || "?").toUpperCase().slice(0, 12), name: x.baseToken?.name || "", img: x.info?.imageUrl || "",
+    price: +x.priceUsd || 0, fdv: +(x.fdv || x.marketCap || 0), liq: +(x.liquidity?.usd || 0),
+    ch5: +(x.priceChange?.m5 || 0), ch1: +(x.priceChange?.h1 || 0), ch24: +(x.priceChange?.h24 || 0),
+    buys: x.txns?.m5?.buys || 0, sells: x.txns?.m5?.sells || 0, vol5: +(x.volume?.m5 || 0), vol1: +(x.volume?.h1 || 0),
+    age, neu: age != null && age < 24 * 60, t: now(), ...extra,
+  };
+}
+async function loadDS() {
+  const [prof, boost] = await Promise.all([getJSON(`${DS}/token-profiles/latest/v1`), getJSON(`${DS}/token-boosts/latest/v1`)]);
+  const mints = [...new Set([...(prof || []), ...(boost || [])].filter((x) => x.chainId === "solana").map((x) => x.tokenAddress))].slice(0, 30);
+  if (!mints.length) return;
+  const d = await getJSON(`${DS}/latest/dex/tokens/${mints.join(",")}`);
+  const best = {};
+  for (const x of d.pairs || []) {
+    if (x.chainId !== "solana" || !mints.includes(x.baseToken?.address)) continue;
+    const m = x.baseToken.address;
+    if (!best[m] || (x.liquidity?.usd || 0) > (best[m].liquidity?.usd || 0)) best[m] = x;
+  }
+  Object.values(best).forEach((x) => upsert(dsItem(x)));
 }
 async function loadHeld() {
   const a = Object.keys(S.pos).filter((k) => k.startsWith("gt:")).map((k) => k.slice(3));
   if (!a.length) return;
-  const d = await getJSON(`${GT}/pools/multi/${a.slice(0, 30).join(",")}?include=base_token`);
-  for (const x of gtItems(d)) mk[x.key] = { ...mk[x.key], ...x };
+  try {
+    if (now() < src.GeckoTerminal.until) throw new Error("pausiert");
+    const d = await getJSON(`${GT}/pools/multi/${a.slice(0, 30).join(",")}?include=base_token`);
+    gtItems(d).forEach(upsert);
+  } catch {
+    const d = await getJSON(`${DS}/latest/dex/pairs/solana/${a.slice(0, 30).join(",")}`);
+    [...(d.pairs || []), ...(d.pair ? [d.pair] : [])].forEach((x) => upsert(dsItem(x, { neu: mk["gt:" + x.pairAddress]?.neu })));
+  }
 }
 
 // ---------- Rug-Check ----------
@@ -246,14 +303,26 @@ function pickFocus() {
   const top = Object.values(mk).filter((m) => m.src === "gt" && m.price).sort((a, b) => (b.ch1 || 0) - (a.ch1 || 0))[0];
   return top?.key || null;
 }
+function localBars(k) {
+  const by = {};
+  for (const s of ph[k] || []) {
+    const t = Math.floor(s.t / 60000) * 60, b = by[t];
+    if (!b) by[t] = { time: t, open: s.p, high: s.p, low: s.p, close: s.p };
+    else { b.high = Math.max(b.high, s.p); b.low = Math.min(b.low, s.p); b.close = s.p; }
+  }
+  return Object.values(by);
+}
 async function loadOhlc(force) {
   const k = focusKey; if (!k) return;
   if (!force && k === chartKey && now() - lastOhlc < 20000) return;
   lastOhlc = now();
   let bars = [];
   if (k.startsWith("gt:")) {
-    const d = await getJSON(`${GT}/pools/${k.slice(3)}/ohlcv/minute?aggregate=1&limit=150&currency=usd`);
-    bars = (d.data?.attributes?.ohlcv_list || []).map((x) => ({ time: x[0], open: +x[1], high: +x[2], low: +x[3], close: +x[4] }));
+    try {
+      if (now() < src.GeckoTerminal.until) throw new Error("pausiert");
+      const d = await getJSON(`${GT}/pools/${k.slice(3)}/ohlcv/minute?aggregate=1&limit=150&currency=usd`);
+      bars = (d.data?.attributes?.ohlcv_list || []).map((x) => ({ time: x[0], open: +x[1], high: +x[2], low: +x[3], close: +x[4] }));
+    } catch { bars = localBars(k); } // Ersatz: Kerzen aus selbst gesammelten Preisen
   } else {
     const d = await getJSON(`${CG}/coins/${k.slice(3)}/ohlc?vs_currency=usd&days=1`);
     bars = d.map((x) => ({ time: Math.floor(x[0] / 1000), open: x[1], high: x[2], low: x[3], close: x[4] }));
@@ -343,7 +412,10 @@ function render() {
   $("trades").textContent = S.trades; $("wl").textContent = `${S.wins}W ${S.losses}L`;
   $("clock").textContent = `${Math.floor(el / 60)}h ${el % 60}m aktiv`;
   const e = Object.entries(errs);
-  $("sub").textContent = e.length ? "⚠ " + e.map(([k, m]) => `${k}: ${m}`).join(" · ") : `${nCg + nGt} Coins live · ${nNew} neu · ${LABEL[CFG.risk]}`;
+  const st = Object.entries(src).map(([k, s]) => `${k === "GeckoTerminal" ? "GT" : "DS"} ${s.ok === null ? "…" : s.ok ? "✓" : "✗"}`).join(" ");
+  const solDown = src.GeckoTerminal.ok === false && src.DexScreener.ok === false;
+  $("sub").textContent = (solDown ? "⚠ Solana-Daten gerade nicht erreichbar – neuer Versuch folgt · " : e.length ? "⚠ " + e.map(([k, m]) => `${k}: ${m}`).join(" · ") + " · " : "")
+    + `${nCg + nGt} Coins · ${nNew} neu · ${st}`;
   $("live").className = "live" + (paused ? " off" : ""); $("live").innerHTML = `<i></i> ${paused ? "Pause" : "Live"}`;
 
   const n = S.wins + S.losses;
@@ -459,10 +531,11 @@ $("c-et").onchange = (e) => { CFG.etabliert = e.target.checked; save(); render()
 $("c-rug").onchange = (e) => { CFG.rug = e.target.checked; save(); render(); };
 
 render();
-Promise.all([safe("SOL-Preis", loadSol), safe("CoinGecko", loadCG), safe("GeckoTerminal", loadGT)]).then(tick);
+Promise.all([safe("SOL-Preis", loadSol), safe("CoinGecko", loadCG), guarded("DexScreener", loadDS), guarded("GeckoTerminal", loadGT)]).then(tick);
 setInterval(() => safe("SOL-Preis", loadSol), 60000);
 setInterval(() => safe("CoinGecko", loadCG), 60000);
-setInterval(() => safe("GeckoTerminal", loadGT), 30000);
+setInterval(() => guarded("GeckoTerminal", loadGT), 45000);
+setInterval(() => guarded("DexScreener", loadDS), 30000);
 setInterval(() => safe("Positionen", loadHeld), 15000);
 setInterval(() => safe("Chart", () => loadOhlc(false)), 20000);
 setInterval(tick, TICK_MS);
