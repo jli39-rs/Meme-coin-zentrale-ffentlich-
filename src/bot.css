@@ -35,3 +35,11 @@ html.locked body > :not(#gate):not(script) { display:none !important; }
 .ticker i { font-style:normal; font-weight:600; }
 .row.trade.new { background:#eef6ff; animation:flash 2s ease-out; border-radius:6px; }
 @keyframes flash { from { background:#cfe3ff; } to { background:#eef6ff; } }
+.pos { padding:8px 0; border-bottom:1px solid var(--line); }
+.pos:last-child { border-bottom:0; }
+.pos img { width:18px; height:18px; border-radius:50%; vertical-align:middle; margin-right:6px; }
+.pos .row { padding:2px 0; }
+.small { font-size:11px; }
+.bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; margin:4px 0; }
+.bar i { display:block; height:100%; }
+.bar i.g { background:var(--up); } .bar i.r { background:var(--down); }

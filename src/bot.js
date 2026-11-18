@@ -57,7 +57,7 @@ function tick() {
   // Risk: 5–10 % des Vermögens
   const size = Math.min(S.cash, equity() * (0.05 + Math.random() * 0.05));
   if (size < 1) { log("SKIP", sym, "Risk: kein Cash frei"); return finish(); }
-  S.cash -= size; S.pos[c.id] = { sym, qty: size / c.current_price, cost: size };
+  S.cash -= size; S.pos[c.id] = { sym, name: c.name, img: c.image, qty: size / c.current_price, cost: size, entry: c.current_price, ts: Date.now() };
   S.trades++; S.calls[1]++; S.calls[2]++;
   rec("BUY", sym, c.current_price, S.pos[c.id].qty, size, null);
   log("BUY", sym, `bull ${bull}/bear ${bear} · ${usd(size)}`);
@@ -95,6 +95,18 @@ function render() {
     ["executor", "EXECUTOR", `${open.length} offene Positionen`],
   ].map((a) => `<div class="row"><span class="tag a-${a[0]}">${a[1]}</span><span class="txt">${esc(a[2])}</span></div>`).join("");
   $("log").innerHTML = S.log.slice(0, 8).map((l) => `<div class="row"><span class="mut">${l.t}</span><span class="${l.type === "BUY" ? "buy" : l.type === "SELL" ? "sell" : "mut"}">${l.type}</span><span class="txt">${esc(l.sym)} · ${esc(l.text)}</span></div>`).join("") || "<div class='mut'>Warte auf Marktdaten…</div>";
+  const pe = Object.entries(S.pos);
+  const inv = pe.reduce((s, [id, p]) => s + p.qty * (price(id) ?? p.entry), 0);
+  $("invested").textContent = pe.length ? `${usd(inv)} in ${pe.length} Coin${pe.length > 1 ? "s" : ""} · Cash ${usd(S.cash)}` : `Nichts offen · Cash ${usd(S.cash)}`;
+  $("positions").innerHTML = pe.map(([id, p]) => {
+    const now = price(id) ?? p.entry, val = p.qty * now, pl = val - p.cost, pc = (val / p.cost - 1) * 100;
+    const bar = Math.max(0, Math.min(100, ((pc + 8) / 14) * 100)); // -8 % Stop ... +6 % Take-Profit
+    const mins = Math.floor((Date.now() - (p.ts || Date.now())) / 60000);
+    return `<div class="pos"><div class="row"><b>${p.img ? `<img src="${esc(p.img)}" alt="">` : ""}${esc(p.sym)} <span class="mut">${esc(p.name || "")}</span></b><b class="${pl >= 0 ? "up" : "down"}">${pl >= 0 ? "+" : "-"}$${Math.abs(pl).toFixed(2)} (${pc >= 0 ? "+" : ""}${pc.toFixed(2)}%)</b></div>
+      <div class="row mut"><span>Einstieg ${fmtP(p.entry ?? now)} → jetzt ${fmtP(now)}</span><span>${usd(val)} · seit ${mins} Min</span></div>
+      <div class="bar"><i style="width:${bar}%" class="${pl >= 0 ? "g" : "r"}"></i></div>
+      <div class="row mut small"><span>Stop −8%</span><span>Take-Profit +6%</span></div></div>`;
+  }).join("") || "<div class='mut'>Der Bot ist gerade in keinem Coin – er wartet auf ein Signal.</div>";
   $("ticker").innerHTML = coins.slice(0, 15).map((c) => { const d = c.price_change_percentage_24h ?? 0; return `<span>${esc(c.symbol.toUpperCase())} ${fmtP(c.current_price)} <i class="${d >= 0 ? "up" : "down"}">${d >= 0 ? "+" : ""}${d.toFixed(1)}%</i></span>`; }).join("");
   const tr = S.tr || [];
   $("tcount").textContent = tr.length + " Trades";
