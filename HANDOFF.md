@@ -37,6 +37,16 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Trade-Verlauf mit Chart (19.11.2026)
+- Neue Karte „📜 Trade-Verlauf“ (`#hist-card`, `renderHistory()`, `loadHistChart()`):
+  - Zusammenfassung: Ergebnis, Trefferquote, Ø Trade, Gebühren.
+  - Liste aller abgeschlossenen Trades mit Kauf-/Verkaufszeit und -preis, Dauer, Grund, SOL und %.
+- Antippen öffnet einen Chart des Trades:
+  - Bei Solana-Coins GeckoTerminal-Kerzen (`ohlcv/minute` mit `before_timestamp`, 1/5/15-Min je nach Dauer), bei etablierten Coins die CoinGecko-Linie (`market_chart/range`).
+  - Markiert sind ▲ KAUF und ▼ VERKAUF, dazu Linien für Kauf- und Verkaufspreis. Zeiten in Ortszeit.
+- Daten: `S.closed` (max. 100), wird in `sell()` geschrieben. Ältere Speicherstände werden einmalig aus `S.tr` (Live-Trade-Log) rekonstruiert, markiert mit „aus altem Log rekonstruiert“. Pool und Mint werden dann über das Symbol gesucht.
+- `S.tr`-Einträge enthalten jetzt zusätzlich `k`, `src`, `pool` und `mint`.
+
 ## Neu-laden-Knopf (19.11.2026)
 - 🔄 oben rechts (`#reload`). Gedacht für die Home-Bildschirm-App, die keinen Reload hat.
 - Holt alle Dateien mit `fetch(…, { cache: "reload" })` am Browser-Cache vorbei – GitHub Pages cacht sonst bis zu 10 Min. Danach aktualisiert er den Service Worker und ruft `location.reload()` auf.

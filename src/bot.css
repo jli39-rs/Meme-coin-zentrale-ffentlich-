@@ -92,6 +92,13 @@ b { font-weight:650; }
 #clusters .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
 .warn-t { color:var(--orange); }
 
+/* Trade-Verlauf */
+.hstats { margin-bottom:6px; } .hstats:empty { display:none; }
+#hist { max-height:560px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+.hrow { padding:8px; margin:4px -4px; border-radius:12px; border:1px solid transparent; cursor:pointer; }
+.hrow .row { padding:2px 0; } .hrow.sel { background:rgba(153,69,255,.08); border-color:rgba(153,69,255,.35); }
+#hist-chart { height:260px; margin:8px 0 4px; }
+
 /* SOL-Kurs */
 .sol-logo { display:inline-block; width:16px; height:16px; border-radius:50%; vertical-align:-3px; margin-right:4px; background:linear-gradient(135deg,#9945ff,#14f195); }
 .sol-price { font-size:38px; font-weight:800; letter-spacing:-1px; line-height:1.1; }

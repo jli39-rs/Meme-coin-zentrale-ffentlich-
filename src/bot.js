@@ -32,9 +32,21 @@ const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; 
 const now = () => Date.now();
 
 // ---------- Zustand ----------
-const fresh = () => ({ v: 3, cash: START, pos: {}, hist: [START], trades: 0, wins: 0, losses: 0, log: [], tr: [], calls: [0, 0, 0, 0], cool: {}, best: 0, worst: 0, fees: 0, rugsAvoided: 0, since: now() });
+const fresh = () => ({ v: 3, cash: START, pos: {}, hist: [START], trades: 0, wins: 0, losses: 0, log: [], tr: [], closed: [], calls: [0, 0, 0, 0], cool: {}, best: 0, worst: 0, fees: 0, rugsAvoided: 0, since: now() });
 let S = load("claudebot", null);
 if (!S || S.v !== 3) S = fresh(); // Umstellung auf SOL: neuer Start mit 5 SOL
+// Trade-Verlauf: ältere Stände haben noch keine Liste abgeschlossener Trades → aus dem Live-Trade-Log rekonstruieren
+if (!Array.isArray(S.closed)) {
+  S.closed = []; const open = {};
+  for (const t of [...(S.tr || [])].reverse()) {
+    if (t.side === "BUY") open[t.sym] = t;
+    else if (t.side === "SELL" && open[t.sym]) {
+      const b = open[t.sym]; delete open[t.sym];
+      S.closed.unshift({ k: b.k || t.k || null, sym: t.sym, img: t.img || b.img, src: b.src || null, pool: b.pool || null, mint: b.mint || null, entry: b.p, exit: t.p,
+        buyTs: b.ts, sellTs: t.ts, cost: b.amt, got: t.amt, pnl: t.pnl, pct: (t.pnl / (b.amt || 1)) * 100, why: t.why, approx: true });
+    }
+  }
+}
 let CFG = { risk: "normal", neu: true, etabliert: true, rug: true, ...load("claudebot-cfg", {}) };
 const mk = {};            // Marktdaten: key -> Coin/Pool
 const rug = {};           // Rug-Check-Ergebnisse: mint -> Bericht
@@ -499,11 +511,14 @@ function log(type, sym, text) {
 }
 function sell(k, reason) {
   const p = S.pos[k], got = valSol(k, p) - NET_FEE, pnl = got - p.cost;
+  (S.closed ||= []).unshift({ k, sym: p.sym, name: p.name, img: p.img, src: p.src, pool: p.pool || null, mint: p.mint || null, entry: p.entry, exit: price(k) || p.entry,
+    buyTs: p.ts, sellTs: now(), cost: p.cost, got, pnl, pct: (pnl / p.cost) * 100, why: reason, tp: p.tp, sl: p.sl, peak: p.peak || 0 });
+  S.closed = S.closed.slice(0, 100);
   S.cash += got; S.fees += NET_FEE + p.qty * (price(k) || p.entry) * FEE[p.src] / (solUsd || 1);
   delete S.pos[k]; S.trades++; S.cool[k] = now();
   pnl >= 0 ? S.wins++ : S.losses++;
   S.best = Math.max(S.best, pnl); S.worst = Math.min(S.worst, pnl);
-  S.tr.unshift({ ts: now(), side: "SELL", sym: p.sym, img: p.img, p: price(k) || p.entry, amt: got, pnl, why: reason });
+  S.tr.unshift({ ts: now(), side: "SELL", k, sym: p.sym, img: p.img, p: price(k) || p.entry, amt: got, pnl, why: reason });
   S.tr = S.tr.slice(0, 80);
   log("SELL", p.sym, `${ssol(pnl)} · ${reason}`);
   if (CFG.notifySell) notify(`${pnl >= 0 ? "💰" : "🔻"} Verkauf: ${p.sym} ${ssol(pnl)}`, reason, p.img);
@@ -517,7 +532,7 @@ function buy(m, why, rc) {
   S.pos[m.key] = { src: m.src, sym: m.sym, name: m.name, img: m.img, mint: m.mint, pool: m.pool, qty, cost: size + NET_FEE, entry: m.price,
     ts: now(), peak: 0, tp: R.tp, sl: R.sl, liq0: m.liq || 0, liqDs: !!m.ds, neu: !!m.neu, rug: rc ? rc.score : null };
   S.trades++; S.calls[3]++;
-  S.tr.unshift({ ts: now(), side: "BUY", sym: m.sym, img: m.img, p: m.price, amt: size, pnl: null, why: (m.neu ? "🆕 " : m.src === "gt" ? "🔥 " : "") + why + (rc ? ` · Rug ${rc.score}/100` : "") });
+  S.tr.unshift({ ts: now(), side: "BUY", k: m.key, src: m.src, pool: m.pool || null, mint: m.mint || null, sym: m.sym, img: m.img, p: m.price, amt: size, pnl: null, why: (m.neu ? "🆕 " : m.src === "gt" ? "🔥 " : "") + why + (rc ? ` · Rug ${rc.score}/100` : "") });
   S.tr = S.tr.slice(0, 80);
   log("BUY", m.sym, `${sol(size)} SOL · ${why}`);
   notify(`🟢 Kauf: ${m.sym}`, `${sol(size)} SOL zu ${fmtP(m.price)} · Ziel +${R.tp}% · Stop −${R.sl}%`, m.img);
@@ -727,6 +742,72 @@ function drawChart(k, bars, secs = false) {
   chartKey = k;
 }
 
+// ---------- Trade-Verlauf (abgeschlossene Trades + Chart mit Kauf/Verkauf) ----------
+let histSel = null, histKey = "", histTv = null, histSeries = null;
+const dur = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? m + " Min" : Math.floor(m / 60) + " Std " + (m % 60) + " Min"; };
+const tStr = (ts) => new Date(ts).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+function renderHistory() {
+  const c = S.closed || [], n = c.length, w = c.filter((x) => x.pnl >= 0).length, sum = c.reduce((s, x) => s + x.pnl, 0);
+  const key = n + ":" + histSel + ":" + (c[0]?.sellTs || 0), selI = c.findIndex((x) => x.sellTs === histSel);
+  $("hcount").textContent = n ? `${n} abgeschlossen` : "";
+  if (histKey === key) return; histKey = key;
+  $("hist-sum").innerHTML = n ? `<div>Ergebnis<b class="${sum >= 0 ? "up" : "down"}">${ssol(sum)}</b></div><div>Treffer<b>${Math.round((w / n) * 100)}% <span class="mut tiny">${w}/${n}</span></b></div>
+    <div>Ø Trade<b class="${sum >= 0 ? "up" : "down"}">${pct(c.reduce((s, x) => s + x.pct, 0) / n)}</b></div><div>Gebühren<b>${sol(S.fees || 0, 3)}</b></div>` : "";
+  $("hist").innerHTML = c.map((x, i) => `<div class="hrow${selI === i ? " sel" : ""}" data-i="${i}">
+      <div class="row"><b>${x.img ? `<img class="coinimg" src="${esc(x.img)}" alt="">` : '<span class="coinimg" style="display:inline-block"></span>'}${esc(x.sym)}</b><b class="${x.pnl >= 0 ? "up" : "down"}">${ssol(x.pnl)} <span class="tiny">${pct(x.pct)}</span></b></div>
+      <div class="row mut tiny"><span>▲ ${tStr(x.buyTs)} · ${fmtP(x.entry)}</span><span>▼ ${fmtP(x.exit)} · ${dur(x.sellTs - x.buyTs)}</span></div>
+      <div class="mut tiny">${esc(x.why || "")}${x.approx ? " · (aus altem Log rekonstruiert)" : ""}</div>
+      ${selI === i ? `<div id="hist-chart" class="tv"></div><div class="mut tiny" id="hist-info">Chart lädt…</div>` : ""}</div>`).join("")
+    || "<div class='mut'>Noch keine abgeschlossenen Trades. Sobald der Bot einen Coin verkauft, erscheint er hier – mit Chart.</div>";
+  document.querySelectorAll("#hist .hrow").forEach((d) => (d.onclick = (e) => { if (e.target.closest("#hist-chart")) return; const id = c[+d.dataset.i].sellTs; histSel = histSel === id ? null : id; renderHistory(); }));
+  if (selI >= 0) loadHistChart(histSel); // auch nach neuem Trade wieder am richtigen Trade
+}
+async function loadHistChart(id) {
+  const x = (S.closed || []).find((y) => y.sellTs === id); if (!x) return;
+  const tz = new Date().getTimezoneOffset() * 60, info = (t) => { const el = $("hist-info"); if (el) el.textContent = t; };
+  // Pool/Mint fehlen bei rekonstruierten Trades → über das Symbol in den Marktdaten suchen
+  const m = x.k ? mk[x.k] : Object.values(mk).find((y) => y.sym === x.sym && y.pool);
+  const pool = x.pool || m?.pool, key = x.k || m?.key || "";
+  const from = Math.floor(x.buyTs / 1000), to = Math.floor(x.sellTs / 1000), span = Math.max(1, (to - from) / 60);
+  let bars = [], src = "";
+  try {
+    if (pool) {
+      const agg = span <= 240 ? 1 : span <= 1200 ? 5 : 15, pad = Math.max(10, span * 0.25);
+      const lim = Math.min(1000, Math.ceil((span + 2 * pad) / agg));
+      const d = await getJSON(`${GT}/pools/${pool}/ohlcv/minute?aggregate=${agg}&limit=${lim}&before_timestamp=${Math.floor(to + pad * 60)}&currency=usd`);
+      bars = (d.data?.attributes?.ohlcv_list || []).map((b) => ({ time: b[0], open: +b[1], high: +b[2], low: +b[3], close: +b[4] }));
+      src = `GeckoTerminal · ${agg}-Min-Kerzen`;
+    } else if (key.startsWith("cg:")) {
+      const d = await getJSON(`${CG}/coins/${key.slice(3)}/market_chart/range?vs_currency=usd&from=${from - 1800}&to=${to + 1800}`);
+      bars = (d.prices || []).map(([t, v]) => ({ time: Math.floor(t / 1000), value: +v }));
+      src = "CoinGecko · Linie (5 Min)";
+    }
+  } catch (e) { src = "Chartdaten gerade nicht erreichbar (" + e.message + ")"; }
+  if (!bars.length && key) { bars = localBars(key).filter((b) => b.time >= from - 3600 && b.time <= to + 3600); if (bars.length) src = "gesammelte Preise (1 Min)"; }
+  if (histSel !== id || !$("hist-chart")) return;
+  if (!bars.length || !window.LightweightCharts) return info(src || "Keine Chartdaten für diesen Trade.");
+  const seen = new Set();
+  bars = bars.map((b) => ({ ...b, time: b.time - tz })).filter((b) => !seen.has(b.time) && seen.add(b.time)).sort((a, b) => a.time - b.time);
+  const el = $("hist-chart"); el.innerHTML = "";
+  histTv = LightweightCharts.createChart(el, { autoSize: true, layout: { background: { color: "transparent" }, textColor: "#7d869b", fontSize: 11 },
+    grid: { vertLines: { color: "rgba(255,255,255,.04)" }, horzLines: { color: "rgba(255,255,255,.04)" } }, rightPriceScale: { borderVisible: false },
+    timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 6 }, crosshair: { mode: 0 } });
+  const last = bars[bars.length - 1], ref = last.close ?? last.value, dec = Math.min(12, Math.max(2, Math.ceil(-Math.log10(ref)) + 3));
+  histSeries = "value" in bars[0] ? histTv.addLineSeries({ color: "#9945ff", lineWidth: 2 }) : histTv.addCandlestickSeries({ upColor: "#14f195", downColor: "#ff4d6d", wickUpColor: "#14f195", wickDownColor: "#ff4d6d", borderVisible: false });
+  histSeries.applyOptions({ priceFormat: { type: "price", precision: dec, minMove: Math.pow(10, -dec) } });
+  histSeries.setData(bars);
+  const near = (t) => bars.reduce((a, b) => (Math.abs(b.time - t) < Math.abs(a.time - t) ? b : a)).time;
+  const win = x.pnl >= 0;
+  histSeries.setMarkers([
+    { time: near(from - tz), position: "belowBar", color: "#4da3ff", shape: "arrowUp", text: "KAUF" },
+    { time: near(to - tz), position: "aboveBar", color: win ? "#14f195" : "#ff4d6d", shape: "arrowDown", text: `VERKAUF ${pct(x.pct, 0)}` },
+  ].sort((a, b) => a.time - b.time));
+  histSeries.createPriceLine({ price: x.entry, color: "#4da3ff", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "Kauf" });
+  histSeries.createPriceLine({ price: x.exit, color: win ? "#14f195" : "#ff4d6d", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "Verkauf" });
+  histTv.timeScale().fitContent();
+  info(`${src} · gekauft ${tStr(x.buyTs)}, verkauft ${tStr(x.sellTs)} (${dur(x.sellTs - x.buyTs)}) · ${sol(x.cost)} SOL → ${sol(x.got)} SOL${x.peak ? ` · Hoch ${pct(x.peak)}` : ""}`);
+}
+
 // ---------- Bubble-Map (wie Bubblemaps: Cluster-Ringe um die gemeinsame Funding-Quelle) ----------
 const CL_COL = ["#ff4d6d", "#ffa23e", "#ffd43b", "#14f195", "#4dd4ff", "#e64dff", "#ff8fab", "#a3e635"];
 const short = (a) => (a && a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a || "?");
@@ -887,6 +968,8 @@ function render() {
   // Live-Trades
   $("tcount").textContent = S.tr.length + " Trades";
   $("trades-live").innerHTML = S.tr.slice(0, 14).map((x, i) => `<div class="row trade${i === 0 && now() - x.ts < 8000 ? " new" : ""}"><span class="mut tiny">${new Date(x.ts).toLocaleTimeString("de-DE")}</span><span class="${x.side === "BUY" ? "buy" : "sell"}">${x.side}</span><span class="txt">${x.img ? `<img class="coinimg" src="${esc(x.img)}" alt="">` : ""}<b>${esc(x.sym)}</b> ${sol(x.amt)} SOL${x.pnl == null ? "" : ` · <b class="${x.pnl >= 0 ? "up" : "down"}">${ssol(x.pnl)}</b>`}<br><span class="mut tiny">${esc(x.why || "")}</span></span></div>`).join("") || "<div class='mut'>Noch keine Trades – der Bot sucht Einstiege…</div>";
+
+  renderHistory();
 
   // Entscheidungen
   const cls = { BUY: "buy", SELL: "sell", RUG: "down", CHECK: "a-rug" };

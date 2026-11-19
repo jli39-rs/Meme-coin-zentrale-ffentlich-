@@ -57,7 +57,16 @@ const reports = {
   await p.locator('#bubbles circle').first().waitFor();
   const circles = await p.locator('#bubbles circle').count(), arrows = await p.locator('#bubbles line[marker-end]').count();
   console.log('tv canvas:', await p.locator('#tv canvas').count(), 'bubbles:', circles, 'pfeile:', arrows, 'cluster-zeilen:', await p.locator('#clusters .row').count());
-  await p.screenshot({ path: process.env.SHOT || 'shot.png', fullPage: true });
+  // Trade-Verlauf: abgeschlossener GOOD-Trade antippen → Chart mit Kauf/Verkauf
+  await p.locator('#hist .hrow').first().click(); await p.waitForTimeout(3000);
+  const hist = { rows: await p.locator('#hist .hrow').count(), canvas: await p.locator('#hist-chart canvas').count(), info: (await p.textContent('#hist-info').catch(() => '')).trim(), sum: (await p.textContent('#hist-sum')).replace(/\s+/g, ' ').trim() };
+  console.log('Verlauf:', hist.rows, 'Trades ·', hist.sum, '·', hist.info);
+  await p.locator('#hist-card').screenshot({ path: process.env.SHOT_HIST || 'verlauf.png' });
+  // Alter Speicherstand ohne Verlauf → aus dem Live-Trade-Log rekonstruiert
+  const old = { v: 3, cash: 5.1, pos: {}, hist: [5], trades: 2, wins: 1, losses: 0, log: [], calls: [0, 0, 0, 0], cool: {}, best: 0.1, worst: 0, fees: 0.01, rugsAvoided: 0, since: Date.now(),
+    tr: [{ ts: Date.now() - 6e5, side: 'SELL', sym: 'OLD', p: 0.0013, amt: 0.6, pnl: 0.1, why: 'Take-Profit +20%' }, { ts: Date.now() - 18e5, side: 'BUY', sym: 'OLD', p: 0.001, amt: 0.5, why: 'Score 4' }] };
+  await p.evaluate((o) => localStorage.setItem('claudebot', JSON.stringify(o)), old); await p.reload(); await p.waitForTimeout(2500);
+  const rec = await p.evaluate(() => S.closed.map((x) => `${x.sym} ${x.pnl}`));
   await b.close();
   const has = (re) => log.some((l) => re.test(l));
   const checks = {
@@ -70,6 +79,8 @@ const reports = {
     'GOOD mit Take-Profit verkauft': trades.some((t) => /^SELL GOOD Take-Profit/.test(t)),
     'Pool-Wallet (22 %) nicht als Holder gezählt': !has(/^RUG GOOD/),
     'Bubble-Map mit Pfeilen': arrows >= 3,
+    'Trade-Verlauf mit Chart (Kauf/Verkauf)': hist.rows >= 1 && hist.canvas > 0 && /gekauft .* verkauft/.test(hist.info),
+    'alte Trades rekonstruiert': rec.length === 1 && rec[0] === 'OLD 0.1',
     'keine JS-Fehler': errors.length === 0,
   };
   let fail = 0;
