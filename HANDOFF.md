@@ -37,6 +37,18 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## 1s-Chart mit Stop/Ziel + Solana-Fokus (19.11.2026, später)
+- **Chart-Modi** (`chartMode`, gespeichert):
+  - `s1` = Standard „⚡ 1 s + Stop/Ziel“: eigener Lightweight-Chart mit **1-Sekunden-Kerzen aus den echten Einzel-Trades**. Quelle: GeckoTerminal `GET /pools/<pool>/trades` (gratis, letzte 300 Trades, Abruf alle 6 s, `loadTrades()`, max. 1 Std. im Speicher). Einstieg/Ziel/Stop sind eingezeichnet, und die Preis-Skala wird so erweitert, dass Stop und Ziel immer sichtbar sind.
+  - Ohne GeckoTerminal greift ein Ersatz: Kerzen aus den gesammelten Preisen.
+  - `bot` = „📊 1 Min“: 1-Min-Kerzen.
+  - `ds` = „DexScreener 1s“: eingebetteter Live-Chart, ohne eigene Linien.
+- **Solana-Fokus:**
+  - Etablierte CoinGecko-Coins nur als Beimischung: höchstens `maxCg` (1/1/2) gleichzeitig.
+  - Gedämpfter Score (1h-Änderung auf −5…+6 %, 24h-Änderung auf −20…+60 % gedeckelt); vorher kamen Scores über 20 vor.
+  - Im Chart haben Solana-Positionen Vorrang.
+- Test: `node tests/test-live-chart.js` prüft u. a. die 3 Linien im 1s-Chart.
+
 ## Schnellere Preise + 1-Sekunden-Chart (19.11.2026)
 - **Chart-Umschalter** im Top-Trade-Chart (`#chart-mode`):
   - „📊 Bot-Chart“: eigener Chart mit Einstieg/Ziel/Stop, 1-Min-Kerzen + Live-Preis.

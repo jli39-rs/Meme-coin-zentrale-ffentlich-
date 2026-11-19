@@ -13,9 +13,9 @@ const START = 5, TICK_MS = 5000, NET_FEE = 0.0005, MIN_TRADE = 0.05; // SOL
 const FEE = { cg: 0.003, gt: 0.01 }; // simulierte DEX-Gebühr + Slippage je Seite
 const PRESETS = {
   // clMax = größter Cluster (gemeinsame Funding-Quelle) in % · bundleN/bundlePct = ab so vielen Wallets aus einer Quelle mit so viel % → Bundle/Sniper
-  vorsichtig: { size: 0.06, tp: 15, sl: 7,  trailOn: 8,  trail: 4,  maxPos: 4, minScore: 3.5, minLiq: 60000, timeMin: 120, maxRug: 25, clMax: 12, bundleN: 8,  bundlePct: 2 },
-  normal:     { size: 0.10, tp: 30, sl: 12, trailOn: 12, trail: 6,  maxPos: 6, minScore: 3.0, minLiq: 25000, timeMin: 60,  maxRug: 40, clMax: 18, bundleN: 12, bundlePct: 4 },
-  aggressiv:  { size: 0.15, tp: 90, sl: 20, trailOn: 25, trail: 12, maxPos: 8, minScore: 2.5, minLiq: 12000, timeMin: 30,  maxRug: 55, clMax: 25, bundleN: 20, bundlePct: 6 },
+  vorsichtig: { size: 0.06, tp: 15, sl: 7,  trailOn: 8,  trail: 4,  maxPos: 4, minScore: 3.5, minLiq: 60000, timeMin: 120, maxRug: 25, maxCg: 1, clMax: 12, bundleN: 8,  bundlePct: 2 },
+  normal:     { size: 0.10, tp: 30, sl: 12, trailOn: 12, trail: 6,  maxPos: 6, minScore: 3.0, minLiq: 25000, timeMin: 60,  maxRug: 40, maxCg: 1, clMax: 18, bundleN: 12, bundlePct: 4 },
+  aggressiv:  { size: 0.15, tp: 90, sl: 20, trailOn: 25, trail: 12, maxPos: 8, minScore: 2.5, minLiq: 12000, timeMin: 30,  maxRug: 55, maxCg: 2, clMax: 25, bundleN: 20, bundlePct: 6 },
 };
 const LABEL = { vorsichtig: "Vorsichtig", normal: "Normal", aggressiv: "Aggressiv" };
 
@@ -383,7 +383,11 @@ function score(m) {
   if (m.src === "cg") {
     if (!CFG.etabliert) return null;
     if (m.mcap < 5e6 || m.vol24 / m.mcap < 0.03) return { skip: "Safety: zu wenig Volumen" };
-    return { s: 2 + m.ch1 / 1.2 + m.ch24 / 20, why: `1h ${pct(m.ch1)} · 24h ${pct(m.ch24)}` };
+    // Solana-Fokus: etablierte Coins nur als Beimischung → gedämpfter, begrenzter Score
+    const nCg = Object.values(S.pos).filter((p) => p.src === "cg").length;
+    if (nCg >= P().maxCg) return { skip: `Fokus Solana: schon ${nCg} etablierte${nCg > 1 ? "" : "r"} Coin` };
+    const cl = (v, a, b) => Math.max(a, Math.min(b, v || 0));
+    return { s: 1.5 + cl(m.ch1, -5, 6) / 1.5 + cl(m.ch24, -20, 60) / 30, why: `1h ${pct(m.ch1)} · 24h ${pct(m.ch24)}` };
   }
   if (!CFG.neu || !m.price) return null;
   if (m.liq < R.minLiq) return { skip: `Safety: Liquidität nur $${big(m.liq)}` };
@@ -487,20 +491,51 @@ function tick() {
 }
 
 // ---------- Fokus: Top-Trade-Chart (TradingView Lightweight Charts) ----------
-// Drei Ansichten: "bot" = eigener Kerzenchart mit Einstieg/Ziel/Stop (1-Min-Kerzen + Live-Preis),
-// "live1s" = eingebetteter DexScreener-Chart mit 1-Sekunden-Kerzen (gratis, live per Websocket; interval=1S geprüft 19.11.2026),
-// "gt" = eingebetteter GeckoTerminal-Chart (1 Min; dessen 1s-Ansicht blieb im Test leer).
-let chartMode = load("claudebot-chart", "bot"), embedKey = "";
-if (!["bot", "live1s", "gt"].includes(chartMode)) chartMode = "bot";
-function setChartMode(m) { chartMode = m; try { localStorage.setItem("claudebot-chart", JSON.stringify(m)); } catch {} embedKey = ""; if (m === "bot") { tv = null; chartKey = null; } render(); }
+// Drei Ansichten: "bot" = eigener Kerzenchart mit 1-Min-Kerzen + Live-Preis,
+// "s1" = eigener Chart mit 1-SEKUNDEN-Kerzen aus den Einzel-Trades (GeckoTerminal /pools/<pool>/trades, gratis, letzte 300 Trades)
+//        → hier sind Einstieg/Ziel/Stop eingezeichnet,
+// "ds" = eingebetteter DexScreener-Chart mit 1-Sekunden-Kerzen (interval=1S, live; Linien dort nicht möglich).
+let chartMode = load("claudebot-chart", "s1"), embedKey = "";
+if (chartMode === "live1s" || chartMode === "gt") chartMode = "ds";
+if (!["bot", "s1", "ds"].includes(chartMode)) chartMode = "s1";
+const poolOf = (k) => S.pos[k]?.pool || mk[k]?.pool || "";
+const secBars = {}; // key -> { sekunde: {time,open,high,low,close} }
+let tradesBusy = false, tradesAt = 0, tradesErr = "";
+async function loadTrades(k) {
+  const pool = poolOf(k), mint = S.pos[k]?.mint || mk[k]?.mint;
+  if (!pool || tradesBusy) return;
+  tradesBusy = true;
+  try {
+    let d;
+    try {
+      if (now() < src.GeckoTerminal.until) throw new Error("pausiert");
+      d = await getJSON(`${GT}/pools/${pool}/trades`); tradesErr = "";
+    } catch (e) { // Ersatz: Kerzen aus den selbst gesammelten Preisen (Jupiter/DexScreener), keine Fehlermeldung oben
+      tradesErr = e.message || "Fehler";
+      if (chartMode === "s1" && focusKey === k) drawChart(k, localBars(k));
+      return;
+    }
+    const by = (secBars[k] ||= {});
+    const tr = (d.data || []).map((x) => x.attributes).filter((a) => a && !a.is_anomalous)
+      .map((a) => ({ t: Math.floor(new Date(a.block_timestamp) / 1000), p: +(a.from_token_address === mint ? a.price_from_in_usd : a.to_token_address === mint ? a.price_to_in_usd : a.kind === "sell" ? a.price_from_in_usd : a.price_to_in_usd) }))
+      .filter((x) => x.p > 0 && x.t > 0).sort((a, b) => a.t - b.t);
+    // Trades einer Sekunde zu einer Kerze; GT liefert neueste zuerst – bereits gezeichnete Sekunden werden neu berechnet
+    const fresh = {};
+    for (const x of tr) { const b = fresh[x.t]; fresh[x.t] = b ? { ...b, high: Math.max(b.high, x.p), low: Math.min(b.low, x.p), close: x.p } : { time: x.t, open: x.p, high: x.p, low: x.p, close: x.p }; }
+    Object.assign(by, fresh);
+    const keys = Object.keys(by).map(Number).sort((a, b) => a - b);
+    for (const t of keys.slice(0, Math.max(0, keys.length - 3600))) delete by[t]; // max. 1 Std. Sekunden-Kerzen
+    tradesAt = now();
+    if (chartMode === "s1" && focusKey === k) drawChart(k, Object.values(by).sort((a, b) => a.time - b.time), true);
+  } finally { tradesBusy = false; }
+}
+function setChartMode(m) { chartMode = m; try { localStorage.setItem("claudebot-chart", JSON.stringify(m)); } catch {} embedKey = ""; tv = null; chartKey = null; series = null; if (!$("tv").classList.contains("embed")) $("tv").innerHTML = ""; render(); }
 function showEmbed(pool) {
   const el = $("tv"), k = chartMode + ":" + pool;
   el.classList.add("embed");
   if (embedKey === k) return;
   embedKey = k; tv = null; series = null; chartKey = null;
-  const url = chartMode === "gt"
-    ? `https://www.geckoterminal.com/solana/pools/${encodeURIComponent(pool)}?embed=1&info=0&swaps=0&light_chart=0&chart_type=price&resolution=1m`
-    : `https://dexscreener.com/solana/${encodeURIComponent(pool)}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=1S`;
+  const url = `https://dexscreener.com/solana/${encodeURIComponent(pool)}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=1S`;
   el.innerHTML = `<iframe src="${url}" title="Live-Chart" loading="lazy" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
 }
 let tv = null, series = null, lines = [], chartKey = null, lastOhlc = 0, ohlcBusy = null, lastBar = null;
@@ -515,7 +550,8 @@ function liveCandle(k, pr) {
 function pickFocus() {
   if (focusSel && (S.pos[focusSel] || mk[focusSel])) return focusSel;
   const pe = Object.entries(S.pos);
-  if (pe.length) return pe.map(([k, p]) => [k, valSol(k, p) / p.cost]).sort((a, b) => b[1] - a[1])[0][0];
+  // Solana-Positionen zuerst (dort gibt es den 1s-Chart), dann nach Gewinn
+  if (pe.length) return pe.map(([k, p]) => [k, valSol(k, p) / p.cost + (p.pool ? 100 : 0)]).sort((a, b) => b[1] - a[1])[0][0];
   const top = Object.values(mk).filter((m) => m.src === "gt" && m.price).sort((a, b) => (b.ch1 || 0) - (a.ch1 || 0))[0];
   return top?.key || null;
 }
@@ -529,7 +565,7 @@ function localBars(k) {
   return Object.values(by);
 }
 async function loadOhlc(force) {
-  const k = focusKey; if (!k || ohlcBusy || $("tv").classList.contains("embed")) return; // nie mehrere Chart-Abrufe gleichzeitig
+  const k = focusKey; if (!k || ohlcBusy || $("tv").classList.contains("embed") || (chartMode === "s1" && poolOf(k))) return; // nie mehrere Chart-Abrufe gleichzeitig
   if (k === chartKey && now() - lastOhlc < (force ? 5000 : 20000)) return;
   ohlcBusy = k; lastOhlc = now();
   try { await loadOhlcFor(k); } finally { ohlcBusy = null; chartKey ||= k; }
@@ -551,7 +587,7 @@ async function loadOhlcFor(k) {
   bars = bars.filter((b) => !seen.has(b.time) && seen.add(b.time)).sort((a, b) => a.time - b.time);
   drawChart(k, bars);
 }
-function drawChart(k, bars) {
+function drawChart(k, bars, secs = false) {
   const el = $("tv");
   if (!bars.length) { el.innerHTML = "<div class='mut tiny' style='padding:20px'>Noch keine Chartdaten.</div>"; tv = null; chartKey = k; return; }
   const p = S.pos[k], last = bars[bars.length - 1].close;
@@ -573,6 +609,10 @@ function drawChart(k, bars) {
     lines = [];
   }
   series.applyOptions({ priceFormat: { type: "price", precision: dec, minMove: Math.pow(10, -dec) } });
+  tv.applyOptions({ timeScale: { secondsVisible: secs } });
+  // Preis-Skala so erweitern, dass Stop-Loss und Take-Profit immer sichtbar sind
+  const pp = S.pos[k], lo = pp ? pp.entry * (1 - pp.sl / 100) : 0, hi = pp ? pp.entry * (1 + pp.tp / 100) : 0;
+  series.applyOptions({ autoscaleInfoProvider: (orig) => { const r = orig(); if (!r || !pp) return r; return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, lo * 0.99), maxValue: Math.max(r.priceRange.maxValue, hi * 1.01) } }; } });
   series.setData(bars); lastBar = { ...bars[bars.length - 1] };
   lines.forEach((l) => series.removePriceLine(l)); lines = [];
   if (p) {
@@ -720,9 +760,13 @@ function render() {
       : `<a href="https://www.coingecko.com/en/coins/${esc(fk.slice(3))}" target="_blank" rel="noopener">📊 CoinGecko</a><a href="https://www.tradingview.com/symbols/${esc(sym)}USD/" target="_blank" rel="noopener">📈 TradingView</a>`;
     const fpool = fp?.pool || fm?.pool;
     document.querySelectorAll("#chart-mode button").forEach((b) => { b.classList.toggle("on", b.dataset.m === (fpool ? chartMode : "bot")); b.disabled = !fpool && b.dataset.m !== "bot"; });
-    $("live-info").textContent = fk.startsWith("gt:") ? (chartMode === "bot" ? `⚡ Preis alle ${JUP_MS / 1000} s über Jupiter${mk[fk]?.live ? ` · zuletzt ${Math.max(0, Math.round((now() - mk[fk].live) / 1000))} s` : ""}` : chartMode === "live1s" ? "⚡ Live-Chart von DexScreener mit 1-Sekunden-Kerzen (Zeitraum oben im Chart umstellbar · Einstieg/Ziel/Stop nur im Bot-Chart)" : "Live-Chart von GeckoTerminal (1 Min)") : "";
-    if (fpool && chartMode !== "bot") showEmbed(fpool);
-    else { if ($("tv").classList.contains("embed")) { $("tv").classList.remove("embed"); $("tv").innerHTML = ""; embedKey = ""; tv = null; chartKey = null; } if (fk !== chartKey && !ohlcBusy) safe("Chart", () => loadOhlc(true)); }
+    $("live-info").textContent = !fk.startsWith("gt:") && !fpool ? "Etablierter Coin: nur 1-Min-Chart (Live 1s gibt es bei Solana-Coins)"
+      : chartMode === "s1" && tradesErr ? "GeckoTerminal-Trades gerade nicht erreichbar – Ersatz: 1-Min-Kerzen aus gesammelten Preisen · Einstieg/Ziel/Stop eingezeichnet"
+      : chartMode === "s1" ? `⚡ 1-Sekunden-Kerzen aus den echten Trades (GeckoTerminal, alle 6 s) · Einstieg/Ziel/Stop eingezeichnet${tradesAt ? ` · aktualisiert vor ${Math.max(0, Math.round((now() - tradesAt) / 1000))} s` : ""}`
+      : chartMode === "ds" ? "DexScreener-Chart mit 1-Sekunden-Kerzen, live (Einstieg/Ziel/Stop nur in „⚡ 1 s“)"
+      : `1-Min-Kerzen · Preis alle ${JUP_MS / 1000} s über Jupiter${mk[fk]?.live ? ` · zuletzt vor ${Math.max(0, Math.round((now() - mk[fk].live) / 1000))} s` : ""}`;
+    if (fpool && chartMode === "ds") showEmbed(fpool);
+    else { if ($("tv").classList.contains("embed")) { $("tv").classList.remove("embed"); $("tv").innerHTML = ""; embedKey = ""; tv = null; chartKey = null; } if (fk !== chartKey && !ohlcBusy && !tradesBusy) safe("Chart", () => (chartMode === "s1" && fpool ? loadTrades(fk) : loadOhlc(true))); }
     // Rug-Panel für den Fokus-Coin
     if (mint && !rug[mint]) requestRug(mint, pool);
     renderRug(mint, sym);
@@ -732,7 +776,7 @@ function render() {
 
   // Agenten
   $("agents").innerHTML = [
-    ["scanner", "SCANNER", `${nCg + nGt} Coins im Blick · ${nNew} neue Pools`],
+    ["scanner", "SCANNER", `Fokus Solana · ${nGt} Solana-Pools (${nNew} neu) · ${nCg} etablierte`],
     ["safety", "SAFETY", `Liq ≥ $${big(R.minLiq)} · Pool ≥ 3 Min · Kaufdruck · Bot-Volumen`],
     ["rug", "RUG-CHECK", CFG.rug ? `Mint/Freeze · LP · Top-10 · Cluster ≤ ${R.clMax}% · Bundles · max ${R.maxRug}/100` : "aus – nur Basis-Checks"],
     ["analyst", "ANALYST", `Momentum 5m/1h · Score ≥ ${R.minScore}`],
@@ -760,7 +804,7 @@ function render() {
   // Einstellungen
   document.querySelectorAll("#risk button").forEach((b) => b.classList.toggle("on", b.dataset.r === CFG.risk));
   $("c-neu").checked = CFG.neu; $("c-et").checked = CFG.etabliert; $("c-rug").checked = CFG.rug;
-  $("rinfo").textContent = `${R.size * 100}% pro Trade · Ziel +${R.tp}% · Stop −${R.sl}% · Trailing ab +${R.trailOn}% (−${R.trail}%) · max ${R.maxPos} Coins · Zeit-Exit ${R.timeMin} Min · Rug-Score ≤ ${R.maxRug}`;
+  $("rinfo").textContent = `${R.size * 100}% pro Trade · Ziel +${R.tp}% · Stop −${R.sl}% · Trailing ab +${R.trailOn}% (−${R.trail}%) · max ${R.maxPos} Coins (davon max ${R.maxCg} etablierte) · Zeit-Exit ${R.timeMin} Min · Rug-Score ≤ ${R.maxRug}`;
   equityChart();
 }
 
@@ -820,3 +864,4 @@ setInterval(() => safe("Positionen", loadHeld), 15000);
 setInterval(() => safe("Chart", () => loadOhlc(false)), 20000);
 setInterval(tick, TICK_MS);
 setInterval(() => guarded("Jupiter", loadLive), JUP_MS);
+setInterval(() => { if (chartMode === "s1" && focusKey && poolOf(focusKey) && !$("tv").classList.contains("embed")) safe("Chart", () => loadTrades(focusKey)); }, 6000);
