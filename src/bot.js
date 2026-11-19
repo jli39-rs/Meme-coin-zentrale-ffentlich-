@@ -73,15 +73,103 @@ function upsert(x) {
   if (x.price) { const a = (ph[x.key] ||= []); if (!a.length || now() - a[a.length - 1].t > 5000) a.push({ t: now(), p: x.price }); if (a.length > 600) a.shift(); }
 }
 
+// ---------- SOL-Kurs (EUR/USD) wie bei Google: Preis, Änderung, Verlauf 1 T. – 1 J., Umrechner ----------
+const SOL_POOL = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"; // Raydium SOL/USDC – Ersatzquelle für den Verlauf
+let solEur = 0, solCh = {}, solT = 0, solDays = 1, solCur = load("claudebot-cur", "EUR");
+let fx = load("claudebot-fx", 0.91); // EUR je USD (aus dem letzten CoinGecko-Kurs), nur für Ersatzquellen
+const solHist = {}; // "EUR:1" -> { t, pts: [[ms, preis]], src }
+const eurF = (n, d = 2) => (n ?? 0).toLocaleString("de-DE", { minimumFractionDigits: d, maximumFractionDigits: d });
+const eur = (n) => eurF(n) + " €";
+const solPrice = (cur = solCur) => (cur === "EUR" ? solEur || solUsd * fx : solUsd);
+const money = (n, cur = solCur) => (cur === "EUR" ? eur(n) : "$" + eurF(n));
 async function loadSol() {
-  const tries = [
-    async () => +(await getJSON(`${CG}/simple/price?ids=solana&vs_currencies=usd`)).solana.usd,
+  try {
+    const d = (await getJSON(`${CG}/simple/price?ids=solana&vs_currencies=usd,eur&include_24hr_change=true`)).solana;
+    if (d?.usd > 0) {
+      solUsd = +d.usd; solEur = +d.eur || 0; solT = now();
+      solCh = { USD: d.usd_24h_change, EUR: d.eur_24h_change };
+      if (solEur) { fx = solEur / solUsd; try { localStorage.setItem("claudebot-fx", JSON.stringify(fx)); } catch {} }
+      return;
+    }
+  } catch {}
+  const tries = [ // Ersatz: nur USD, EUR über den zuletzt bekannten Wechselkurs
     async () => { const d = await getJSON(`${DS}/latest/dex/tokens/${WSOL}`); return +((d.pairs || []).filter((x) => x.baseToken?.address === WSOL).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]?.priceUsd); },
     async () => +Object.values((await getJSON(`${GT.replace("/networks/solana", "")}/simple/networks/solana/token_price/${WSOL}`)).data.attributes.token_prices)[0],
   ];
   let last;
-  for (const t of tries) { try { const v = await t(); if (v > 0) { solUsd = v; return; } } catch (e) { last = e; } }
+  for (const t of tries) { try { const v = await t(); if (v > 0) { solUsd = v; solEur = 0; solT = now(); solCh = {}; return; } } catch (e) { last = e; } }
   throw last || new Error("kein SOL-Preis");
+}
+async function loadSolChart(force) {
+  const days = solDays, cur = solCur, key = cur + ":" + days, c = solHist[key];
+  if (c && !force && now() - c.t < (days === 1 ? 300000 : 1800000)) return drawSol();
+  try {
+    const d = await getJSON(`${CG}/coins/solana/market_chart?vs_currency=${cur.toLowerCase()}&days=${days}`);
+    if (!d.prices?.length) throw new Error("leer");
+    solHist[key] = { t: now(), pts: d.prices, src: "CoinGecko" };
+  } catch {
+    const [tf, agg, lim] = days === 1 ? ["minute", 15, 96] : days === 5 ? ["hour", 1, 120] : days === 30 ? ["hour", 4, 180] : ["day", 1, days];
+    const d = await getJSON(`${GT}/pools/${SOL_POOL}/ohlcv/${tf}?aggregate=${agg}&limit=${lim}&currency=usd`);
+    const k = cur === "EUR" ? fx : 1;
+    solHist[key] = { t: now(), pts: (d.data?.attributes?.ohlcv_list || []).map((x) => [x[0] * 1000, x[4] * k]).reverse(), src: "GeckoTerminal (Raydium SOL/USDC)" + (cur === "EUR" ? ", in EUR umgerechnet" : "") };
+  }
+  drawSol();
+}
+// Fehler beim Verlauf nur in der SOL-Karte anzeigen, nicht oben in der Statuszeile
+let solErr = "";
+const solChart = (force) => loadSolChart(force).then(() => (solErr = ""), (e) => (solErr = e.message || "Fehler")).finally(renderSol);
+let solTv = null, solSeries = null, solTvKey = "";
+function drawSol() {
+  const h = solHist[solCur + ":" + solDays], el = $("sol-chart");
+  if (!h?.pts?.length) return;
+  const tz = new Date().getTimezoneOffset() * 60, seen = new Set();
+  const data = h.pts.map(([t, v]) => ({ time: Math.floor(t / 1000) - tz, value: +v })).filter((x) => x.value > 0 && !seen.has(x.time) && seen.add(x.time)).sort((a, b) => a.time - b.time);
+  if (!data.length) return;
+  const up = data[data.length - 1].value >= data[0].value, col = up ? "#14f195" : "#ff4d6d";
+  if (!window.LightweightCharts) return;
+  if (!solTv) {
+    el.innerHTML = "";
+    solTv = LightweightCharts.createChart(el, {
+      autoSize: true, layout: { background: { color: "transparent" }, textColor: "#7d869b", fontSize: 11 },
+      grid: { vertLines: { visible: false }, horzLines: { color: "rgba(255,255,255,.05)" } },
+      rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+      localization: { locale: "de-DE", priceFormatter: (p) => eurF(p) }, handleScroll: false, handleScale: false, crosshair: { mode: 1 },
+    });
+    solSeries = solTv.addAreaSeries({ lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+  }
+  solSeries.applyOptions({ lineColor: col, topColor: up ? "rgba(20,241,149,.25)" : "rgba(255,77,109,.25)", bottomColor: "rgba(0,0,0,0)" });
+  solTv.applyOptions({ timeScale: { timeVisible: solDays <= 5 } });
+  solSeries.setData(data);
+  const k = solCur + ":" + solDays;
+  if (solTvKey !== k) { solTv.timeScale().fitContent(); solTvKey = k; }
+  renderSol();
+}
+const RANGE_TXT = { 1: "24 Std.", 5: "5 Tage", 30: "1 Monat", 180: "6 Monate", 365: "1 Jahr" };
+function renderSol() {
+  const p = solPrice();
+  document.querySelectorAll("#sol-range button").forEach((b) => b.classList.toggle("on", +b.dataset.d === solDays));
+  $("cv-cur").value = solCur;
+  if (!p) return;
+  $("sol-big").textContent = eurF(p); $("sol-cur").textContent = solCur;
+  // Änderung: 24 Std. direkt von CoinGecko, sonst aus dem Verlauf des gewählten Zeitraums
+  let chp = null;
+  const h = solHist[solCur + ":" + solDays];
+  if (solDays === 1 && solCh[solCur] != null) chp = solCh[solCur];
+  else if (h?.pts?.length) chp = (p / h.pts[0][1] - 1) * 100;
+  if (chp != null) {
+    const abs = p - p / (1 + chp / 100);
+    $("sol-ch").className = chp >= 0 ? "up" : "down";
+    // Ersatzquelle hat evtl. weniger Verlauf (GeckoTerminal: ~6 Monate) → tatsächlichen Zeitraum nennen
+    const span = h?.pts?.length && solDays > 1 ? (h.pts[h.pts.length - 1][0] - h.pts[0][0]) / 86400000 : solDays;
+    const rt = span < solDays * 0.8 ? `${Math.round(span)} Tage (mehr Verlauf gerade nicht verfügbar)` : RANGE_TXT[solDays];
+    $("sol-ch").textContent = `${abs >= 0 ? "+" : "−"}${eurF(Math.abs(abs))} (${eurF(Math.abs(chp))} %) ${chp >= 0 ? "↑" : "↓"} ${rt}`;
+  } else { $("sol-ch").className = "mut"; $("sol-ch").textContent = RANGE_TXT[solDays]; }
+  $("sol-time").textContent = solT ? new Date(solT).toLocaleString("de-DE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  $("sol-src").textContent = `Kurs: ${solEur || solCur === "USD" ? "CoinGecko" : "DexScreener/GeckoTerminal (EUR geschätzt)"} · Verlauf: ${h?.src || (solErr ? "gerade nicht erreichbar (" + solErr + ")" : "lädt…")}`;
+  // Umrechner (nicht überschreiben, während man tippt)
+  const a = document.activeElement;
+  if (a !== $("cv-fiat")) { const v = parseFloat($("cv-sol").value.replace(",", ".")); $("cv-fiat").value = isFinite(v) ? (v * p).toFixed(2) : ""; }
+  else { const v = parseFloat($("cv-fiat").value.replace(",", ".")); if (a !== $("cv-sol")) $("cv-sol").value = isFinite(v) ? +(v / p).toFixed(6) : ""; }
 }
 async function loadCG() {
   const d = await getJSON(`${CG}/coins/markets?vs_currency=usd&category=meme-token&order=volume_desc&per_page=100&page=1&price_change_percentage=1h,24h`);
@@ -454,13 +542,13 @@ function drawChart(k, bars) {
 const CL_COL = ["#ff4d6d", "#ffa23e", "#ffd43b", "#14f195", "#4dd4ff", "#e64dff", "#ff8fab", "#a3e635"];
 const short = (a) => (a && a.length > 10 ? a.slice(0, 4) + "…" + a.slice(-4) : a || "?");
 let bubbleNodes = [];
-function bubbleMsg(svg, txt) { svg.setAttribute("viewBox", "0 0 400 260"); svg.innerHTML = `<text x="200" y="130" text-anchor="middle" fill="#7d869b" font-size="12">${esc(txt)}</text>`; svg.dataset.k = ""; $("bubble-info").textContent = ""; $("clusters").innerHTML = ""; }
+function bubbleMsg(svg, txt) { svg.classList.add("empty"); svg.setAttribute("viewBox", "0 0 400 90"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); svg.innerHTML = `<text x="200" y="50" text-anchor="middle" fill="#7d869b" font-size="12">${esc(txt)}</text>`; svg.dataset.k = ""; $("bubble-info").textContent = ""; $("clusters").innerHTML = ""; }
 function bubbles(rc, mint) {
   const svg = $("bubbles");
   if (!rc || !rc.holders?.length) return bubbleMsg(svg, rc?.pending ? "Holder werden geladen…" : rc?.fail ? "RugCheck nicht erreichbar – keine Holder-Daten" : "Keine Holder-Daten (nur bei neuen Solana-Coins)");
   const key = mint + ":" + rc.t + ":" + CFG.risk;
   if (svg.dataset.k === key) return; // Layout nur neu rechnen, wenn sich die Daten ändern
-  svg.dataset.k = key;
+  svg.dataset.k = key; svg.classList.remove("empty");
   // Knoten: Cluster-Wallets (aus dem Insider-Graph) + lose Top-Holder
   const nodes = [], byId = {}, links = [];
   const add = (n) => { if (byId[n.id]) return byId[n.id]; byId[n.id] = n; nodes.push(n); return n; };
@@ -532,7 +620,8 @@ function render() {
   const R = P(), v = equity(), pnl = v - START, el = Math.floor((now() - S.since) / 60000);
   const all = Object.values(mk), nNew = all.filter((m) => m.neu).length, nGt = all.filter((m) => m.src === "gt").length, nCg = all.filter((m) => m.src === "cg").length;
   $("val").textContent = sol(v);
-  $("usd").textContent = solUsd ? `≈ ${usd(v * solUsd)} · 1 SOL = ${usd(solUsd)}` : "SOL-Preis lädt…";
+  $("usd").textContent = solUsd ? `≈ ${solCur === "EUR" ? eur(v * solPrice("EUR")) : usd(v * solUsd)} · 1 SOL = ${money(solPrice())}` : "SOL-Preis lädt…";
+  renderSol();
   $("delta").textContent = `${ssol(pnl)} (${pct((v / START - 1) * 100)})`; $("delta").className = pnl >= 0 ? "up" : "down";
   $("mult").textContent = (v / START).toFixed(2) + "×";
   $("trades").textContent = S.trades; $("wl").textContent = `${S.wins}W ${S.losses}L`;
@@ -658,9 +747,16 @@ $("c-neu").onchange = (e) => { CFG.neu = e.target.checked; save(); render(); };
 $("c-et").onchange = (e) => { CFG.etabliert = e.target.checked; save(); render(); };
 $("c-rug").onchange = (e) => { CFG.rug = e.target.checked; save(); render(); };
 
+document.querySelectorAll("#sol-range button").forEach((b) => (b.onclick = () => { solDays = +b.dataset.d; renderSol(); solChart(false); }));
+$("cv-sol").oninput = () => renderSol();
+$("cv-fiat").oninput = () => renderSol();
+$("cv-cur").onchange = (e) => { solCur = e.target.value; try { localStorage.setItem("claudebot-cur", JSON.stringify(solCur)); } catch {} render(); solChart(false); };
+
 render();
-Promise.all([safe("SOL-Preis", loadSol), safe("CoinGecko", loadCG), guarded("DexScreener", loadDS), guarded("GeckoTerminal", loadGT)]).then(tick);
+safe("SOL-Preis", loadSol).then(() => solChart(true));
+Promise.all([ safe("CoinGecko", loadCG), guarded("DexScreener", loadDS), guarded("GeckoTerminal", loadGT)]).then(tick);
 setInterval(() => safe("SOL-Preis", loadSol), 60000);
+setInterval(() => solChart(false), 60000);
 setInterval(() => safe("CoinGecko", loadCG), 60000);
 setInterval(() => guarded("GeckoTerminal", loadGT), 45000);
 setInterval(() => guarded("DexScreener", loadDS), 30000);

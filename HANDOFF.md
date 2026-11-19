@@ -37,6 +37,26 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Handy/iPad-Version + SOL-Kurs (19.11.2026)
+- **SOL-Kurs-Karte** (wie bei Google, `#sol-card` in `bot.html`, Code ab `// ---------- SOL-Kurs` in `src/bot.js`):
+  - Preis in EUR (oder USD, umschaltbar), Änderung 24 Std., Verlauf 1 T./5 T./1 M./6 M./1 J. als Flächen-Chart (Lightweight Charts) und Umrechner SOL ↔ EUR/USD.
+  - Quellen: CoinGecko `simple/price?vs_currencies=usd,eur&include_24hr_change=true` und `coins/solana/market_chart`.
+  - Ersatz bei CoinGecko-Limit: Verlauf über GeckoTerminal-Pool Raydium SOL/USDC (`58oQChx4…`), EUR über den letzten bekannten Wechselkurs. GT hat dort nur ~6 Monate Verlauf – das wird dann ehrlich angezeigt.
+  - Hinweis: Google zeigt „heute“ (seit 0 Uhr), die Karte zeigt „24 Std.“ – die Zahlen weichen deshalb leicht ab.
+- Portfolio-Wert zusätzlich in € (bzw. $ je nach Auswahl).
+- **iPad/Tablet (ab 820 px Breite): zwei Spalten.**
+  - Links: Portfolio, Kennzahlen, SOL-Kurs, Top-Trade, Positionen.
+  - Rechts: Rug-Check, Live-Trades, Entscheidungen, Einstellungen, Agenten.
+  - Auf dem Handy stehen alle Bereiche in dieser Reihenfolge untereinander.
+- iOS-Korrekturen:
+  - Kein `background-attachment: fixed` mehr, das ergab einen weißen Hintergrund beim Scrollen.
+  - Eingabefelder ≥ 16 px, damit iOS beim Antippen nicht zoomt.
+  - Safe-Area links und rechts beachtet.
+  - Kein „hängender“ Hover-Effekt auf Touch-Geräten.
+  - Die leere Bubble-Map ist jetzt klein.
+- Test: `node tests/test-sol-kurs.js` (echte APIs, einmal normal und einmal mit gesperrtem CoinGecko).
+- Ungetestet: echtes iPhone/iPad-Safari – getestet nur per Chromium-Emulation (iPhone 14, iPad 1180×820).
+
 ## API-Prüfung (18.11.2026, live gegen die echten APIs)
 Alle vier APIs antworten mit `access-control-allow-origin: *` (CORS ok): RugCheck, GeckoTerminal, DexScreener, CoinGecko.
 - **RugCheck** `/v1/tokens/<mint>/report`: Feldnamen stimmen (`token.mintAuthority/freezeAuthority/supply`, `markets[].lp.lpLockedPct`, `topHolders[].{address,owner,pct,insider}`, `graphInsidersDetected`, `score_normalised`, `risks[].{name,level}`, `creator`, `rugged`, `totalHolders`). Neu genutzt: `knownAccounts` (Typ `AMM`/`LOCKER`/`CREATOR` → Pool- und Dev-Wallets), `insiderNetworks[]` (`size`, `type` transfer|trade, `currentHolding` in Roh-Einheiten → % über `token.supply`).

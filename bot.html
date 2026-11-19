@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
+  <meta name="format-detection" content="telephone=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Claude Bot – Paper Trading</title>
@@ -21,6 +22,8 @@
 
   <div class="ticker"><div class="ticker-in" id="ticker"></div></div>
 
+  <div class="cols">
+  <div class="col">
   <section class="hero card">
     <div class="hero-top">
       <span class="mut">Portfolio</span>
@@ -34,6 +37,20 @@
 
   <div class="stats" id="stats"></div>
 
+  <section class="card" id="sol-card">
+    <div class="head"><b><span class="sol-logo"></span> Solana · SOL</b><span class="mut tiny" id="sol-time"></span></div>
+    <div class="sol-price"><span id="sol-big">–</span><small id="sol-cur">EUR</small></div>
+    <div id="sol-ch" class="mut">lädt…</div>
+    <div class="seg small" id="sol-range"><button data-d="1">1 T.</button><button data-d="5">5 T.</button><button data-d="30">1 M.</button><button data-d="180">6 M.</button><button data-d="365">1 J.</button></div>
+    <div id="sol-chart" class="sol-chart"></div>
+    <div class="conv">
+      <label><input id="cv-sol" type="number" inputmode="decimal" min="0" step="any" value="1"><span>SOL</span></label>
+      <span class="mut">=</span>
+      <label><input id="cv-fiat" type="number" inputmode="decimal" min="0" step="any"><select id="cv-cur"><option>EUR</option><option>USD</option></select></label>
+    </div>
+    <div class="mut tiny" id="sol-src"></div>
+  </section>
+
   <section class="card" id="focus-card">
     <div class="head"><b id="focus-title">🏆 Top-Trade live</b><span class="mut tiny" id="focus-hint">tippe eine Position an</span></div>
     <div id="focus-info"></div>
@@ -46,6 +63,8 @@
     <div id="positions"></div>
   </section>
 
+  </div>
+  <div class="col">
   <section class="card">
     <div class="head"><b>🛡️ Rug-Check</b><span id="rug-verdict"></span></div>
     <div id="rug"></div>
@@ -56,19 +75,7 @@
     <div class="links" id="rug-links"></div>
   </section>
 
-  <section class="card">
-    <div class="head"><b>Einstellungen</b><span class="mut tiny">gilt für neue Trades</span></div>
-    <div class="seg" id="risk"><button data-r="vorsichtig">🛡️ Vorsichtig</button><button data-r="normal">⚖️ Normal</button><button data-r="aggressiv">🚀 Aggressiv</button></div>
-    <label class="chk"><input type="checkbox" id="c-neu"> 🆕 Neue &amp; trendende Solana-Coins</label>
-    <label class="chk"><input type="checkbox" id="c-et"> Etablierte Meme Coins</label>
-    <label class="chk"><input type="checkbox" id="c-rug"> 🛡️ Nur mit bestandenem Rug-Check kaufen</label>
-    <div class="mut tiny" id="rinfo"></div>
-  </section>
 
-  <section class="card">
-    <div class="head"><b>Agenten</b><span class="up tiny">6 aktiv</span></div>
-    <div id="agents"></div>
-  </section>
 
   <section class="card">
     <div class="head"><b>Live-Trades</b><span class="mut tiny" id="tcount">0</span></div>
@@ -80,7 +87,22 @@
     <div id="log"></div>
   </section>
 
+
+  <section class="card">
+    <div class="head"><b>Einstellungen</b><span class="mut tiny">gilt für neue Trades</span></div>
+    <div class="seg" id="risk"><button data-r="vorsichtig">🛡️ Vorsichtig</button><button data-r="normal">⚖️ Normal</button><button data-r="aggressiv">🚀 Aggressiv</button></div>
+    <label class="chk"><input type="checkbox" id="c-neu"> 🆕 Neue &amp; trendende Solana-Coins</label>
+    <label class="chk"><input type="checkbox" id="c-et"> Etablierte Meme Coins</label>
+    <label class="chk"><input type="checkbox" id="c-rug"> 🛡️ Nur mit bestandenem Rug-Check kaufen</label>
+    <div class="mut tiny" id="rinfo"></div>
+  </section>
+  <section class="card">
+    <div class="head"><b>Agenten</b><span class="up tiny">6 aktiv</span></div>
+    <div id="agents"></div>
+  </section>
   <section class="card" id="repos"></section>
+  </div>
+  </div>
 
   <div class="actions">
     <button id="toggle">⏸ Pause</button>
