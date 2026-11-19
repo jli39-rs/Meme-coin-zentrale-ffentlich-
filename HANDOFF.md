@@ -37,6 +37,14 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Benachrichtigungen bei Käufen (19.11.2026)
+- Bei jedem Kauf erscheint immer ein Hinweis oben in der Seite (`toast()`), Verkäufe optional („Auch bei Verkäufen benachrichtigen“).
+- Zusätzlich gibt es eine System-Mitteilung (`notify()`), wenn sie in den Einstellungen per „🔔 Mitteilungen bei Käufen einschalten“ erlaubt wurde. Sie läuft über `sw.js` (minimaler Service Worker **ohne Caching**, nur für Mitteilungen und das Antippen).
+- **iPad/iPhone:** Mitteilungen gibt es nur als Home-Bildschirm-App (ab iOS 16.4). Dafür neu: `manifest.webmanifest`, `icon-180/192/512.png`, `apple-touch-icon`. Der Weg: Safari → Teilen → „Zum Home-Bildschirm“ → über das Symbol öffnen → im Bot einschalten. Die Seite erklärt das selbst.
+- Grenze: Der Bot läuft nur, solange die Seite/App offen ist. iOS pausiert sie im Hintergrund, dann kommen keine Käufe und keine Mitteilungen. Echte Push-Mitteilungen bei geschlossener App bräuchten einen Server – nicht gebaut.
+- Test: `node tests/test-benachrichtigung.js` (gemockt, volles Headless-Chromium).
+- **Nicht getestet:** auf einem echten iPad/iPhone.
+
 ## 1s-Chart mit Stop/Ziel + Solana-Fokus (19.11.2026, später)
 - **Chart-Modi** (`chartMode`, gespeichert):
   - `s1` = Standard „⚡ 1 s + Stop/Ziel“: eigener Lightweight-Chart mit **1-Sekunden-Kerzen aus den echten Einzel-Trades**. Quelle: GeckoTerminal `GET /pools/<pool>/trades` (gratis, letzte 300 Trades, Abruf alle 6 s, `loadTrades()`, max. 1 Std. im Speicher). Einstieg/Ziel/Stop sind eingezeichnet, und die Preis-Skala wird so erweitert, dass Stop und Ziel immer sichtbar sind.

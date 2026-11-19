@@ -419,6 +419,7 @@ function sell(k, reason) {
   S.tr.unshift({ ts: now(), side: "SELL", sym: p.sym, img: p.img, p: price(k) || p.entry, amt: got, pnl, why: reason });
   S.tr = S.tr.slice(0, 80);
   log("SELL", p.sym, `${ssol(pnl)} · ${reason}`);
+  if (CFG.notifySell) notify(`${pnl >= 0 ? "💰" : "🔻"} Verkauf: ${p.sym} ${ssol(pnl)}`, reason, p.img);
   S.calls[3]++;
 }
 function buy(m, why, rc) {
@@ -432,6 +433,7 @@ function buy(m, why, rc) {
   S.tr.unshift({ ts: now(), side: "BUY", sym: m.sym, img: m.img, p: m.price, amt: size, pnl: null, why: (m.neu ? "🆕 " : m.src === "gt" ? "🔥 " : "") + why + (rc ? ` · Rug ${rc.score}/100` : "") });
   S.tr = S.tr.slice(0, 80);
   log("BUY", m.sym, `${sol(size)} SOL · ${why}`);
+  notify(`🟢 Kauf: ${m.sym}`, `${sol(size)} SOL zu ${fmtP(m.price)} · Ziel +${R.tp}% · Stop −${R.sl}%`, m.img);
 }
 
 function checkExits() {
@@ -832,6 +834,47 @@ function renderRug(mint, sym) {
     ${rc.reasons.length ? `<div class="tiny down">⚠ ${rc.reasons.map(esc).join(" · ")}</div>` : `<div class="tiny up">✓ ${rc.ok.map(esc).join(" · ")}</div>`}`;
   bubbles(rc, mint);
 }
+
+// ---------- Benachrichtigungen ----------
+// 1) Immer: Hinweis-Karte oben in der Seite. 2) Wenn erlaubt: Mitteilung des Systems (iPad/iPhone nur als Home-Bildschirm-App, ab iOS 16.4).
+// Der Bot läuft nur, solange die Seite offen ist – im Hintergrund pausiert iOS die Seite, dann kommen auch keine Mitteilungen.
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const standalone = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+let swReg = null;
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").then((r) => (swReg = r)).catch(() => {});
+function toast(title, body, img) {
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.innerHTML = `${img ? `<img src="${esc(img)}" alt="">` : ""}<div><b>${esc(title)}</b><div class="tiny">${esc(body)}</div></div>`;
+  t.onclick = () => t.remove();
+  $("toasts").appendChild(t);
+  setTimeout(() => t.classList.add("out"), 6000); setTimeout(() => t.remove(), 6600);
+}
+function notify(title, body, img) {
+  toast(title, body, img);
+  if (!CFG.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+  const opt = { body, icon: "icon-192.png", badge: "icon-192.png", tag: "claudebot-" + now(), silent: false };
+  if (swReg?.showNotification) swReg.showNotification(title, opt).catch(() => {});
+  else try { new Notification(title, opt); } catch {}
+}
+function notifyInfo() {
+  const el = $("n-info"); if (!el) return;
+  const can = "Notification" in window, perm = can ? Notification.permission : "nicht verfügbar";
+  $("n-btn").textContent = CFG.notify && perm === "granted" ? "🔔 Mitteilungen an – ausschalten" : "🔔 Mitteilungen bei Käufen einschalten";
+  el.textContent = !can ? (isIOS && !standalone() ? "Auf iPad/iPhone: unten/oben auf Teilen (□↑) → „Zum Home-Bildschirm“, dann die Seite über das neue Symbol öffnen und hier einschalten. Bis dahin gibt es die Hinweise nur in der Seite." : "Dieser Browser unterstützt keine Mitteilungen – Hinweise kommen nur in der Seite.")
+    : perm === "denied" ? "Mitteilungen sind blockiert – in den Einstellungen des Geräts für diese App/Seite erlauben."
+    : CFG.notify && perm === "granted" ? "Mitteilungen aktiv. Hinweis: nur solange die App/Seite geöffnet ist." : "Hinweise in der Seite kommen immer.";
+}
+$("n-btn").onclick = async () => {
+  if (CFG.notify && "Notification" in window && Notification.permission === "granted") { CFG.notify = false; save(); return notifyInfo(); }
+  if (!("Notification" in window)) return notifyInfo();
+  const r = await Notification.requestPermission(); // muss direkt nach dem Antippen passieren
+  CFG.notify = r === "granted"; save(); notifyInfo();
+  if (CFG.notify) notify("🔔 Mitteilungen aktiv", "Du bekommst jetzt bei jedem Kauf eine Mitteilung.");
+};
+$("c-sell").onchange = (e) => { CFG.notifySell = e.target.checked; save(); };
+$("c-sell").checked = !!CFG.notifySell;
+notifyInfo();
 
 // ---------- Bedienung ----------
 $("toggle").onclick = () => { paused = !paused; $("toggle").textContent = paused ? "▶ Weiter" : "⏸ Pause"; render(); };

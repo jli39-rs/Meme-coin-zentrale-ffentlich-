@@ -9,8 +9,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Claude Bot – Paper Trading</title>
   <link rel="stylesheet" href="src/bot.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-title" content="Claude Bot">
 </head>
 <body>
+<div id="toasts"></div>
 <div class="app">
   <header class="top">
     <div class="brand">
@@ -96,6 +101,11 @@
     <label class="chk"><input type="checkbox" id="c-neu"> 🆕 Neue &amp; trendende Solana-Coins</label>
     <label class="chk"><input type="checkbox" id="c-et"> Etablierte Meme Coins</label>
     <label class="chk"><input type="checkbox" id="c-rug"> 🛡️ Nur mit bestandenem Rug-Check kaufen</label>
+    <div class="notif">
+      <button id="n-btn" class="ghost">🔔 Mitteilungen bei Käufen einschalten</button>
+      <label class="chk"><input type="checkbox" id="c-sell"> Auch bei Verkäufen benachrichtigen</label>
+      <div class="mut tiny" id="n-info"></div>
+    </div>
     <div class="mut tiny" id="rinfo"></div>
   </section>
   <section class="card">
