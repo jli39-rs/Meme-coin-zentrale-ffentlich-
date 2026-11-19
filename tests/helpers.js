@@ -14,3 +14,16 @@ async function openBot(p, file = 'bot.html') {
   await p.fill('#gc', process.env.ZENTRALE_CODE); await p.click('#gate button');
 }
 module.exports = { openBot };
+
+// Attrappe für den Solana-RPC (Funding-Check). Wallets, deren Adresse mit "fund" beginnt, wurden vor 1 Std.
+// von "HUBFUND" finanziert (frisch, gemeinsame Quelle); alle anderen Wallets haben keine Historie.
+async function mockRpc(p) {
+  await p.route('**/solana-rpc.publicnode.com/**', (r) => {
+    const q = JSON.parse(r.request().postData() || '{}'), [a] = q.params || [];
+    const res = (result) => r.fulfill({ json: { jsonrpc: '2.0', id: q.id, result } });
+    if (q.method === 'getSignaturesForAddress') return res(String(a).startsWith('fund') ? [{ signature: 'sig-' + a, blockTime: Math.floor(Date.now() / 1000) - 3600 }] : []);
+    if (q.method === 'getTransaction') { const w = String(a).slice(4); return res({ transaction: { message: { accountKeys: [{ pubkey: 'HUBFUND' }], instructions: [{ parsed: { type: 'transfer', info: { source: 'HUBFUND', destination: w, lamports: 1e8 } } }] } }, meta: { innerInstructions: [] } }); }
+    res(null);
+  });
+}
+module.exports.mockRpc = mockRpc;

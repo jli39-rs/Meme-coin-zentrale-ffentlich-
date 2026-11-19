@@ -272,7 +272,7 @@ async function loadLive() {
 // Insider-Graph: GET /v1/tokens/<mint>/insiders/graph → [{net_id, network_type, nodes:[{id,participant,holdings}], links:[{source,target}]}]
 const CL_POOL = /clmm|dlmm|whirlpool|orca|concentrated/i; // konzentrierte Liquidität: LP-Lock nicht anwendbar
 const MASS_NET = 1000; // Netzwerke mit > 1000 Wallets sind meist Börsen/Airdrops, keine Rug-Cluster
-function analyseRug(r, g, pool) {
+function analyseRug(r, g, pool, fd) {
   const R = P();
   const out = { score: 0, reasons: [], hard: [], ok: [], notes: [], reject: false, holders: [], clusters: [] };
   const bad = (pts, txt, hard) => { out.score += pts; out.reasons.push(txt); if (hard) { out.reject = true; out.hard.push(txt); } };
@@ -326,6 +326,29 @@ function analyseRug(r, g, pool) {
     if (nets.length && (n.size || 0) <= MASS_NET) continue; // schon aus dem Graph
     nets.push({ id: n.id, type: n.type || "transfer", size: n.size || n.activeAccounts || 0, pct: pctOf(n.currentHolding), hub: null, fan: Math.max(0, (n.size || 1) - 1), members: [], links: [] });
   }
+  // ---- Eigene Bubblemaps-Logik (unabhängig von RugCheck) ----
+  // a) Gleich große Wallets: Dev kauft beim Start mit vielen Wallets gleich viel (Bundle). Beispiel GTA: 11 × ~2,3 %.
+  const bigH = real.filter((h) => h.pct >= 0.8).map((h) => h.pct).sort((a, b) => b - a);
+  let eq = null;
+  for (const c of bigH) { const grp = bigH.filter((x) => Math.abs(x - c) / c <= 0.06); if (grp.length >= 4 && (!eq || grp.length > eq.n)) eq = { n: grp.length, each: c, sum: grp.reduce((s, x) => s + x, 0) }; }
+  out.equal = eq;
+  if (eq) real.forEach((h) => { if (h.pct >= 0.8 && Math.abs(h.pct - eq.each) / eq.each <= 0.06) h.eq = true; });
+  if (eq && eq.sum >= 6) bad(40, `Bundle: ${eq.n} Wallets halten je ~${eq.each.toFixed(1)}% (zusammen ${eq.sum.toFixed(0)}%)`, true);
+  // b) Funding: welche Wallet hat den Top-Holdern ihr erstes SOL geschickt (Solana-RPC, siehe analyseFunding)
+  out.fund = fd ? { checked: fd.checked, fresh: fd.fresh, fail: fd.fail || null } : null;
+  if (fd && !fd.fail) {
+    const pctBy = {}; real.forEach((h) => (pctBy[h.addr] = h.pct));
+    const groups = Object.entries(fd.by || {}).map(([src, ws]) => ({ src, ws, pct: ws.reduce((s, w) => s + (pctBy[w] || 0), 0), ex: !!fd.busy?.[src] }))
+      .filter((x) => x.ws.length >= 2 && !isPool(x.src)).sort((a, b) => b.ws.length - a.ws.length || b.pct - a.pct);
+    for (const x of groups) nets.push({ id: "fund:" + x.src, type: "funding", size: x.ws.length + 1, pct: Math.min(100, x.pct), hub: x.src, fan: x.ws.length,
+      members: [{ id: x.src, pct: pctBy[x.src] || 0 }, ...x.ws.map((w) => ({ id: w, pct: pctBy[w] || 0 }))], links: x.ws.map((w) => ({ source: x.src, target: w })), ex: x.ex });
+    const worst = groups.find((x) => (x.ws.length >= 3 && x.pct >= 5 && !x.ex) || (x.ws.length >= 5 && x.pct >= 10));
+    out.fundTop = groups[0] || null;
+    if (worst) bad(45, `Funding-Cluster: ${worst.ws.length} Top-Holder vom selben Wallet ${worst.src.slice(0, 4)}…${worst.src.slice(-4)} finanziert, halten ${worst.pct.toFixed(1)}%${worst.ex ? " (Quelle sehr aktiv, evtl. Börse)" : ""}`, true);
+    else if (groups[0]?.ws.length >= 3) bad(10, `${groups[0].ws.length} Top-Holder mit gemeinsamer Quelle (${groups[0].pct.toFixed(1)}%)`);
+    if (fd.fresh.n >= 5 && fd.fresh.pct >= 10) bad(35, `Frische Wallets: ${fd.fresh.n} Top-Holder jünger als 3 Tage halten ${fd.fresh.pct.toFixed(0)}%`, true);
+    else if (fd.fresh.n >= 3 && fd.fresh.pct >= 5) bad(10, `${fd.fresh.n} frische Wallets halten ${fd.fresh.pct.toFixed(1)}%`);
+  }
   const cl = nets.filter((n) => n.size <= MASS_NET && n.size >= 2).sort((a, b) => b.pct - a.pct), mass = nets.filter((n) => n.size > MASS_NET);
   out.clusters = cl; out.mass = mass;
   const top = cl[0], sumCl = cl.reduce((s, n) => s + n.pct, 0);
@@ -363,13 +386,77 @@ function requestRug(mint, pool) {
         try { await sleep(400); g = await getJSON(RC + mint + "/insiders/graph"); } catch { g = null; } // Graph ist nur ein Zusatz
       }
       rugRaw[mint] = { r, g, pool };
-      rug[mint] = { ...analyseRug(r, g, pool), t: now(), graph: !!g };
+      rug[mint] = { ...analyseRug(r, g, pool, fund[mint]), t: now(), graph: !!g };
       delete errs.RugCheck;
     } catch (e) { rug[mint] = { fail: true, t: now() }; errs.RugCheck = e.message || "nicht erreichbar"; }
     render();
   })();
 }
-const reanalyse = () => { for (const [m, x] of Object.entries(rugRaw)) rug[m] = { ...analyseRug(x.r, x.g, x.pool), t: rug[m]?.t || now(), graph: !!x.g }; };
+const reanalyse = (only) => { for (const [m, x] of Object.entries(rugRaw)) if (!only || only === m) rug[m] = { ...analyseRug(x.r, x.g, x.pool, fund[m]), t: now(), graph: !!x.g }; };
+
+// ---------- Funding-Check über Solana-RPC (wie Bubblemaps) ----------
+// Für die 20 größten echten Holder: erste Transaktion der Wallet → wer hat sie finanziert (erste SOL-/Token-Überweisung)
+// und wie alt ist sie. Wallets mit ≥ 1000 Transaktionen gelten als alt/aktiv (keine frische Sybil-Wallet).
+// api.mainnet-beta.solana.com lehnt Anfragen aus dem Browser ab (403 bei Origin-Header) → PublicNode (gratis, ohne Key, CORS *)
+const SOL_RPC = "https://solana-rpc.publicnode.com", RPC_GAP = 130;
+let rpcNext = 0;
+async function rpc(method, params) {
+  const t = Math.max(now(), rpcNext); rpcNext = t + RPC_GAP; if (t > now()) await sleep(t - now());
+  let r;
+  try { r = await fetch(SOL_RPC, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }); }
+  catch { throw new Error("Solana-RPC blockiert/Limit"); }
+  if (r.status === 429) throw new Error("Solana-RPC-Limit");
+  if (!r.ok) throw new Error("Solana-RPC HTTP " + r.status);
+  const j = await r.json(); if (j.error) throw new Error("Solana-RPC: " + (j.error.message || "Fehler"));
+  return j.result;
+}
+const walletInfo = {}; // wallet -> { src, ageH, txs, old }
+async function fundingOf(w) {
+  if (walletInfo[w]) return walletInfo[w];
+  const sigs = (await rpc("getSignaturesForAddress", [w, { limit: 1000 }])) || [];
+  if (sigs.length >= 1000) return (walletInfo[w] = { old: true, txs: sigs.length });
+  const first = sigs[sigs.length - 1];
+  if (!first) return (walletInfo[w] = { txs: 0 });
+  const ageH = first.blockTime ? (now() / 1000 - first.blockTime) / 3600 : null;
+  const tx = await rpc("getTransaction", [first.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }]);
+  const msg = tx?.transaction?.message || {}, ixs = [...(msg.instructions || []), ...((tx?.meta?.innerInstructions || []).flatMap((x) => x.instructions || []))];
+  let src = null;
+  for (const ix of ixs) {
+    const p = ix?.parsed; if (!p || typeof p !== "object") continue;
+    const i = p.info || {};
+    if (/^transfer/.test(p.type) && i.destination === w && i.source && i.source !== w) { src = i.source; break; }
+    if (p.type === "createAccount" && i.newAccount === w && i.source !== w) { src = i.source; break; }
+  }
+  if (!src) { const k = (msg.accountKeys || [])[0]; const fee = typeof k === "string" ? k : k?.pubkey; if (fee && fee !== w) src = fee; } // sonst: wer die Gebühr bezahlt hat
+  return (walletInfo[w] = { src, ageH, txs: sigs.length });
+}
+const fund = {}; // mint -> Ergebnis
+async function analyseFunding(mint) {
+  const rc = rug[mint];
+  const hs = (rc?.holders || []).filter((h) => !h.lp && h.addr && h.addr !== "?").sort((a, b) => b.pct - a.pct).slice(0, 20);
+  const by = {}, fresh = { n: 0, pct: 0 };
+  let checked = 0;
+  let errors = 0, lastErr = "";
+  for (const h of hs) {
+    let f;
+    try { f = await fundingOf(h.addr); } catch (e) { errors++; lastErr = e.message; if (/Limit|blockiert|HTTP/.test(e.message) && errors >= 3) throw e; continue; } // einzelne Wallet überspringen
+    checked++;
+    if (f.src) (by[f.src] ||= []).push(h.addr);
+    if (!f.old && f.ageH != null && f.ageH < 72) { fresh.n++; fresh.pct += h.pct; }
+  }
+  // Quellen mit vielen Wallets: ist das eine sehr aktive Wallet (Börse)? Dann nur bei sehr großem Cluster blockieren.
+  const busy = {};
+  for (const [src, ws] of Object.entries(by)) if (ws.length >= 3) { const sigs = (await rpc("getSignaturesForAddress", [src, { limit: 1000 }])) || []; busy[src] = sigs.length >= 1000; }
+  if (hs.length && checked < hs.length / 2) throw new Error(lastErr || "zu wenige Wallets prüfbar");
+  return { by, fresh, busy, checked, errors, t: now() };
+}
+let fundBusy = false;
+function requestFunding(mint) {
+  if (!mint || fund[mint] || fundBusy) return;
+  fundBusy = true; fund[mint] = { pending: true, t: now() };
+  analyseFunding(mint).then((x) => { fund[mint] = x; }, (e) => { fund[mint] = { fail: e.message || "Fehler", t: now() }; })
+    .finally(() => { fundBusy = false; if (rugRaw[mint]) reanalyse(mint); render(); });
+}
 // Fallback, wenn RugCheck nicht erreichbar ist: nur ältere Pools mit viel Liquidität
 const fallbackOk = (m) => m.age != null && m.age > 60 && m.liq >= 50000;
 
@@ -475,6 +562,16 @@ function tick() {
         const rc = rug[m.mint];
         if (!rc) { requestRug(m.mint, m.pool); log("CHECK", m.sym, "Rug-Check läuft…"); acted = true; break; }
         if (rc.pending) { acted = true; break; }
+        // Strenger Funding-Check (Bubblemaps-Logik) vor jedem Kauf eines Solana-Coins
+        if (!rc.fail && !rc.reject && CFG.rug) {
+          const fd = fund[m.mint];
+          if (!fd) { requestFunding(m.mint); log("CHECK", m.sym, "Funding-Check: wer hat die Top-Holder finanziert…"); acted = true; break; }
+          if (fd.pending) { acted = true; break; }
+          if (fd.fail) {
+            if (now() - fd.t > 3 * 60000) delete fund[m.mint]; // später neu versuchen
+            if (m.age == null || m.age < 24 * 60) { S.cool[m.key] = now() - 25 * 60000; log("SKIP", m.sym, `🛡️ Funding-Check nicht möglich (${fd.fail}) – neuer Coin wird nicht gekauft`); acted = true; continue; }
+          }
+        }
         if (rc.fail) {
           if (CFG.rug && !fallbackOk(m)) { S.cool[m.key] = now(); log("SKIP", m.sym, "Rug-Check nicht erreichbar – zu neu/zu wenig Liquidität"); continue; }
         } else if (rc.reject || rc.score > R.maxRug) {
@@ -655,7 +752,7 @@ function bubbles(rc, mint) {
   });
   for (const h of rc.holders.slice(0, 30)) { const n = byId[h.addr]; if (n) { n.h = h; n.pct = Math.max(n.pct, h.pct); } else add({ id: h.addr, pct: h.pct, cl: null, h }); }
   nodes.forEach((n) => (n.r = n.hub && n.pct < 0.05 ? 4.5 : Math.max(n.cl != null ? 3 : 4, Math.sqrt(n.pct) * 9)));
-  const col = (n) => (n.h?.lp ? "#4da3ff" : n.cl != null ? CL_COL[n.cl] : n.h?.dev ? "#ffa23e" : n.h?.insider ? "#ff4d6d" : "#9945ff");
+  const col = (n) => (n.h?.lp ? "#4da3ff" : n.h?.eq ? "#ff2a55" : n.cl != null ? CL_COL[n.cl] : n.h?.dev ? "#ffa23e" : n.h?.insider ? "#ff4d6d" : "#9945ff");
   // Layout
   if (window.d3?.forceSimulation) {
     const sizeOf = shown.map((c) => Math.min(c.members.length, 45));
@@ -685,13 +782,13 @@ function bubbles(rc, mint) {
     <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${n.r.toFixed(1)}" fill="${col(n)}" fill-opacity="${n.hub ? 0.9 : 0.3}" stroke="${n.hub ? "#eef1f7" : col(n)}" stroke-width="${((n.hub ? 1.6 : 1.2) * sc).toFixed(2)}"/>
     ${n.r > 13 * sc ? `<text x="${n.x.toFixed(1)}" y="${(n.y + n.r * 0.3).toFixed(1)}" text-anchor="middle" fill="#eef1f7" font-size="${Math.min(13 * sc, n.r / 2.2).toFixed(1)}" font-weight="600" pointer-events="none">${n.pct.toFixed(1)}%</text>` : ""}</g>`).join("");
   $("bubble-info").textContent = shown.length ? "Tippe eine Bubble an. Pfeile = Token-Überweisungen von der Quelle an die Wallets." : rc.clusters.length ? "Cluster laut RugCheck – Graph-Details nicht verfügbar." : "Keine Cluster erkannt – nur lose Holder.";
-  $("clusters").innerHTML = rc.clusters.slice(0, 6).map((c, i) => `<div class="row"><span><i class="dot" style="background:${i < shown.length ? CL_COL[i] : "#7d869b"}"></i>${c.type === "trade" ? "Handels-Netzwerk" : "Cluster"} · ${c.size} Wallets${c.hub ? ` · Quelle ${esc(short(c.hub))}` : ""}</span><b class="${c.pct >= P().clMax ? "down" : c.pct >= P().clMax / 2 ? "warn-t" : "mut"}">${c.pct.toFixed(1)}%</b></div>`).join("")
+  $("clusters").innerHTML = rc.clusters.slice(0, 6).map((c, i) => `<div class="row"><span><i class="dot" style="background:${i < shown.length ? CL_COL[i] : "#7d869b"}"></i>${c.type === "trade" ? "Handels-Netzwerk" : c.type === "funding" ? "Funding-Cluster" : "Cluster"} · ${c.size} Wallets${c.hub ? ` · Quelle ${esc(short(c.hub))}` : ""}</span><b class="${c.pct >= P().clMax ? "down" : c.pct >= P().clMax / 2 ? "warn-t" : "mut"}">${c.pct.toFixed(1)}%</b></div>`).join("")
     + (rc.notes || []).map((t) => `<div class="mut tiny">ℹ️ ${esc(t)}</div>`).join("");
 }
 $("bubbles").onclick = (e) => {
   const g = e.target.closest("g[data-i]"); if (!g) return;
   const n = bubbleNodes[+g.dataset.i]; if (!n) return;
-  const role = n.h?.lp ? "Pool/LP" : n.hub ? `Funding-Quelle von Cluster ${n.cl + 1}` : n.cl != null ? `Cluster ${n.cl + 1}` : n.h?.dev ? "Dev" : n.h?.insider ? "Insider" : "Holder";
+  const role = n.h?.lp ? "Pool/LP" : n.h?.eq ? "Bundle-Wallet (gleich groß wie andere)" : n.hub ? `Funding-Quelle von Cluster ${n.cl + 1}` : n.cl != null ? `Cluster ${n.cl + 1}` : n.h?.dev ? "Dev" : n.h?.insider ? "Insider" : "Holder";
   $("bubble-info").innerHTML = `<b>${esc(short(n.id))}</b> · ${role} · ${n.pct.toFixed(2)}% · <a href="https://solscan.io/account/${esc(n.id)}" target="_blank" rel="noopener">Solscan</a>`;
 };
 
@@ -771,6 +868,7 @@ function render() {
     else { if ($("tv").classList.contains("embed")) { $("tv").classList.remove("embed"); $("tv").innerHTML = ""; embedKey = ""; tv = null; chartKey = null; } if (fk !== chartKey && !ohlcBusy && !tradesBusy) safe("Chart", () => (chartMode === "s1" && fpool ? loadTrades(fk) : loadOhlc(true))); }
     // Rug-Panel für den Fokus-Coin
     if (mint && !rug[mint]) requestRug(mint, pool);
+    else if (mint && CFG.rug && rug[mint] && !rug[mint].pending && !rug[mint].fail && !fund[mint]) requestFunding(mint);
     renderRug(mint, sym);
   } else {
     $("focus-info").innerHTML = "<div class='mut'>Warte auf Marktdaten…</div>"; renderRug(null);
@@ -780,7 +878,7 @@ function render() {
   $("agents").innerHTML = [
     ["scanner", "SCANNER", `Fokus Solana · ${nGt} Solana-Pools (${nNew} neu) · ${nCg} etablierte`],
     ["safety", "SAFETY", `Liq ≥ $${big(R.minLiq)} · Pool ≥ 3 Min · Kaufdruck · Bot-Volumen`],
-    ["rug", "RUG-CHECK", CFG.rug ? `Mint/Freeze · LP · Top-10 · Cluster ≤ ${R.clMax}% · Bundles · max ${R.maxRug}/100` : "aus – nur Basis-Checks"],
+    ["rug", "RUG-CHECK", CFG.rug ? `Mint/Freeze · LP · Top-10 · Cluster ≤ ${R.clMax}% · Funding-Quelle · frische & gleich große Wallets · max ${R.maxRug}/100` : "aus – nur Basis-Checks"],
     ["analyst", "ANALYST", `Momentum 5m/1h · Score ≥ ${R.minScore}`],
     ["risk", "RISK", `${R.size * 100}% pro Trade · Stop −${R.sl}% · Trailing ${R.trail}%`],
     ["executor", "EXECUTOR", `${pe.length}/${R.maxPos} Positionen · Gebühren ${sol(S.fees || 0, 3)} SOL`],
@@ -830,6 +928,9 @@ function renderRug(mint, sym) {
       <div><span class="mut">Insider</span>${c(rc.ins <= 8, rc.ins.toFixed(1) + "%")}</div>
       <div><span class="mut">Größter Cluster</span>${c(rc.clTop < P().clMax / 2, rc.clusters.length ? `${rc.clTop.toFixed(1)}% (${rc.clusters[0].size} W.)` : "keiner")}</div>
       <div><span class="mut">Bundle/Sniper</span>${c(!rc.bundle, rc.bundle ? `${rc.bundle.fan} Wallets ✗` : "nein ✓")}</div>
+      <div><span class="mut">Gleich große Wallets</span>${c(!rc.equal, rc.equal ? `${rc.equal.n} × ${rc.equal.each.toFixed(1)}% ✗` : "nein ✓")}</div>
+      <div><span class="mut">Funding-Check</span>${!rc.fund ? `<span class="mut">${fund[mint]?.pending ? "läuft…" : "–"}</span>` : rc.fund.fail ? `<span class="warn-t">n/a</span>` : c(!(rc.fundTop?.ws.length >= 3), rc.fundTop ? `${rc.fundTop.ws.length} gleiche Quelle` : `${rc.fund.checked} geprüft ✓`)}</div>
+      <div><span class="mut">Frische Wallets</span>${rc.fund && !rc.fund.fail ? c(rc.fund.fresh.n < 3, `${rc.fund.fresh.n} (${rc.fund.fresh.pct.toFixed(1)}%)`) : '<span class="mut">–</span>'}</div>
     </div>
     ${rc.reasons.length ? `<div class="tiny down">⚠ ${rc.reasons.map(esc).join(" · ")}</div>` : `<div class="tiny up">✓ ${rc.ok.map(esc).join(" · ")}</div>`}`;
   bubbles(rc, mint);

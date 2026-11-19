@@ -1,6 +1,6 @@
 // Benachrichtigung bei Kauf: Hinweis-Karte in der Seite + System-Mitteilung (Service Worker), mit gemockten Marktdaten.
 const { chromium } = require('playwright');
-const { openBot } = require('./helpers');
+const { openBot, mockRpc } = require('./helpers');
 const t0 = Date.now();
 const pair = (sym, price) => ({ chainId: 'solana', dexId: 'raydium', pairAddress: 'PAIR' + sym, baseToken: { address: 'MINT' + sym, name: sym + ' Coin', symbol: sym }, quoteToken: { symbol: 'SOL' },
   priceUsd: String(price), txns: { m5: { buys: 70, sells: 25 } }, volume: { m5: 25000, h1: 120000 }, priceChange: { m5: 5, h1: 40, h24: 80 }, liquidity: { usd: 90000 }, fdv: 900000, pairCreatedAt: Date.now() - 45 * 60000, info: { imageUrl: '' } });
@@ -15,6 +15,7 @@ const pair = (sym, price) => ({ chainId: 'solana', dexId: 'raydium', pairAddress
   await p.route('**/api.coingecko.com/**', (r) => r.fulfill({ json: r.request().url().includes('simple/price') ? { solana: { usd: 140, eur: 128 } } : [] }));
   await p.route('**/api.rugcheck.xyz/**', (r) => r.fulfill({ json: r.request().url().includes('insiders') ? [] : { token: { mintAuthority: null, freezeAuthority: null, supply: 1e15 }, markets: [{ pubkey: 'PAIRMOON', lp: { lpLockedPct: 100 } }], topHolders: [{ address: 'a', owner: 'o', pct: 4 }], risks: [], totalHolders: 900 } }));
   await p.route('**/api.dexscreener.com/**', (r) => { const u = r.request().url(); if (u.includes('token-profiles') || u.includes('token-boosts')) return r.fulfill({ json: [{ chainId: 'solana', tokenAddress: 'MINTMOON' }] }); r.fulfill({ json: { pairs: [pair('MOON', 0.002 * (1 + (Date.now() - t0) / 1e5))] } }); });
+  await mockRpc(p);
   await openBot(p); await p.waitForTimeout(3000);
   await p.click('#n-btn'); await p.waitForTimeout(1500);
   console.log('   ', (await p.textContent('#n-btn')).trim(), '·', (await p.textContent('#n-info')).trim());

@@ -37,6 +37,27 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Strenger Rug-Filter: eigene Bubblemaps-Logik (19.11.2026)
+Anlass war der Coin GTA „Grand Theft Alleycat“ (`8CnvwZJLRpQazvn6LszkzmXJxkmMY2bTQ4Q3NN4fpump`). Bubblemaps zeigte dort einen Riesen-Cluster um eine Wallet, RugCheck dagegen Score 1 und keine Insider-Netzwerke, und der Bot hätte gekauft.
+
+Neu sind drei **harte Sperren für alle Risikostufen**, wenn „Nur mit bestandenem Rug-Check“ an ist:
+1. **Gleich große Wallets** (`analyseRug`, ohne Zusatz-Abruf): ≥ 4 echte Holder mit ≥ 0,8 % und höchstens ±6 % Abweichung voneinander, zusammen ≥ 6 % → „Bundle: 10 Wallets halten je ~2,3 %“. In der Bubble-Map sind diese Wallets rot.
+2. **Funding-Cluster** (`analyseFunding` → `fundingOf`):
+   - Für die 20 größten echten Holder wird per Solana-RPC (`getSignaturesForAddress` + `getTransaction`) die erste Transaktion gelesen: Wer hat die Wallet finanziert, und wie alt ist sie?
+   - Gesperrt wird bei ≥ 3 Wallets aus derselben Quelle mit ≥ 5 % (bei einer sehr aktiven Quelle mit ≥ 1000 Transaktionen, vermutlich einer Börse: erst ab 5 Wallets / 10 %).
+   - Funding-Cluster erscheinen in der Bubble-Map als Ring mit Pfeilen.
+3. **Frische Wallets**: ≥ 5 Top-Holder jünger als 3 Tage mit zusammen ≥ 10 %.
+
+- Lässt sich der Funding-Check nicht durchführen, wird ein Coin, der jünger als 24 h ist, **nicht gekauft**. Nach 3 Min gibt es einen neuen Versuch.
+- **RPC:** `https://solana-rpc.publicnode.com` (gratis, ohne Key, CORS `*`). `api.mainnet-beta.solana.com` lehnt Browser-Anfragen ab (403, sobald ein Origin-Header gesendet wird). Pro Coin sind es etwa 25–60 Anfragen in 7–15 s, mit 130 ms Abstand. Wallet-Ergebnisse werden gecacht.
+- **Ergebnis bei GTA:** blockiert, weil 10 Wallets je ~2,3 % halten und alle 20 Top-Holder frisch sind (27 %). Der PUMP-Token löst die neuen Regeln korrekt nicht aus.
+- **Tests:**
+  - `node tests/test-funding-live.js` (echte APIs, Standard GTA – muss blockiert werden; `MINT=… POOL=…` für andere Coins).
+  - Die Mock-Tests nutzen `mockRpc()` aus `tests/helpers.js`; neu sind die Fälle FUND und EQUL.
+- **Offen bzw. bekannt:**
+  - Viele Meme-Trader nutzen frische Wallets (Trading-Bots), deshalb kann die Frische-Regel auch echte Coins blockieren. Gewollt streng.
+  - Gekaufte Positionen werden nicht laufend neu geprüft (nur der Liquiditäts-Notverkauf greift).
+
 ## Benachrichtigungen bei Käufen (19.11.2026)
 - Bei jedem Kauf erscheint immer ein Hinweis oben in der Seite (`toast()`), Verkäufe optional („Auch bei Verkäufen benachrichtigen“).
 - Zusätzlich gibt es eine System-Mitteilung (`notify()`), wenn sie in den Einstellungen per „🔔 Mitteilungen bei Käufen einschalten“ erlaubt wurde. Sie läuft über `sw.js` (minimaler Service Worker **ohne Caching**, nur für Mitteilungen und das Antippen).
