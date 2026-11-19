@@ -58,7 +58,8 @@ async function getJSON(u) {
 }
 async function safe(name, fn) { try { await fn(); delete errs[name]; } catch (e) { errs[name] = e.message || "Fehler"; } render(); }
 // Quellen-Status mit Wartezeit bei Fehlern (exponentielles Backoff)
-const src = { GeckoTerminal: { ok: null, fails: 0, until: 0 }, DexScreener: { ok: null, fails: 0, until: 0 } };
+const src = { GeckoTerminal: { ok: null, fails: 0, until: 0 }, DexScreener: { ok: null, fails: 0, until: 0 }, Jupiter: { ok: null, fails: 0, until: 0 } };
+const SRC_TAG = { GeckoTerminal: "GT", DexScreener: "DS", Jupiter: "⚡JUP" };
 async function guarded(name, fn) {
   const s = src[name]; if (now() < s.until) return;
   try { await fn(); s.ok = true; s.fails = 0; }
@@ -239,6 +240,27 @@ async function loadHeld() {
   }
 }
 
+// ---------- Schnelle Preise (Jupiter) ----------
+// Jupiter Price API v3 (gratis, ohne Key, CORS ok): bis 50 Mints pro Anfrage, Preis ändert sich etwa alle 10 s.
+// Gilt für alle offenen Solana-Positionen + den Coin im Chart; danach werden Stop/Ziel sofort geprüft.
+const JUP = "https://lite-api.jup.ag/price/v3?ids=", JUP_MS = 3000;
+let lastLive = 0;
+async function loadLive() {
+  const keys = new Set(Object.keys(S.pos).filter((k) => k.startsWith("gt:")));
+  if (focusKey?.startsWith("gt:")) keys.add(focusKey);
+  const byMint = {};
+  for (const k of keys) { const mint = S.pos[k]?.mint || mk[k]?.mint; if (mint && !NOT_MEME.has(mint)) (byMint[mint] ||= []).push(k); }
+  const mints = Object.keys(byMint).slice(0, 50);
+  if (!mints.length) return;
+  const d = await getJSON(JUP + mints.join(","));
+  for (const [mint, x] of Object.entries(d || {})) {
+    const pr = +x?.usdPrice; if (!(pr > 0)) continue;
+    for (const k of byMint[mint] || []) { upsert({ key: k, price: pr, t: now(), live: now() }); liveCandle(k, pr); }
+  }
+  lastLive = now();
+  if (!paused && solUsd) { checkExits(); save(); }
+}
+
 // ---------- Rug-Check ----------
 // Kriterien nach gängigen Checklisten (RugCheck, Bubblemaps, DEXTools u. a.):
 // Mint-/Freeze-Authority aktiv = Ausschluss · LP des Haupt-Pools < 50 % gesperrt = Ausschluss · Top-10 > 40 % (ohne Pool) = Ausschluss
@@ -408,10 +430,8 @@ function buy(m, why, rc) {
   log("BUY", m.sym, `${sol(size)} SOL · ${why}`);
 }
 
-function tick() {
-  if (paused || !solUsd) return;
+function checkExits() {
   const R = P();
-  // 1) Ausstiege
   for (const [k, p] of Object.entries(S.pos)) {
     const m = mk[k]; if (!m || now() - m.t > 10 * 60000) continue;
     // GeckoTerminal und DexScreener messen Liquidität unterschiedlich → bei Quellenwechsel neue Basis statt falschem Rug-Alarm
@@ -425,6 +445,12 @@ function tick() {
     else if (p.peak >= R.trailOn && p.peak - ch >= R.trail) sell(k, `Trailing-Stop (Hoch ${pct(p.peak)})`);
     else if (mins > R.timeMin && ch < 2) sell(k, `Zeit-Exit nach ${Math.round(mins)} Min`);
   }
+}
+function tick() {
+  if (paused || !solUsd) return;
+  const R = P();
+  // 1) Ausstiege
+  checkExits();
   // 2) Einstieg
   if (Object.keys(S.pos).length < R.maxPos) {
     S.calls[0]++;
@@ -461,7 +487,31 @@ function tick() {
 }
 
 // ---------- Fokus: Top-Trade-Chart (TradingView Lightweight Charts) ----------
-let tv = null, series = null, lines = [], chartKey = null, lastOhlc = 0, ohlcBusy = null;
+// Drei Ansichten: "bot" = eigener Kerzenchart mit Einstieg/Ziel/Stop (1-Min-Kerzen + Live-Preis),
+// "live1s" = eingebetteter DexScreener-Chart mit 1-Sekunden-Kerzen (gratis, live per Websocket; interval=1S geprüft 19.11.2026),
+// "gt" = eingebetteter GeckoTerminal-Chart (1 Min; dessen 1s-Ansicht blieb im Test leer).
+let chartMode = load("claudebot-chart", "bot"), embedKey = "";
+if (!["bot", "live1s", "gt"].includes(chartMode)) chartMode = "bot";
+function setChartMode(m) { chartMode = m; try { localStorage.setItem("claudebot-chart", JSON.stringify(m)); } catch {} embedKey = ""; if (m === "bot") { tv = null; chartKey = null; } render(); }
+function showEmbed(pool) {
+  const el = $("tv"), k = chartMode + ":" + pool;
+  el.classList.add("embed");
+  if (embedKey === k) return;
+  embedKey = k; tv = null; series = null; chartKey = null;
+  const url = chartMode === "gt"
+    ? `https://www.geckoterminal.com/solana/pools/${encodeURIComponent(pool)}?embed=1&info=0&swaps=0&light_chart=0&chart_type=price&resolution=1m`
+    : `https://dexscreener.com/solana/${encodeURIComponent(pool)}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=1S`;
+  el.innerHTML = `<iframe src="${url}" title="Live-Chart" loading="lazy" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+}
+let tv = null, series = null, lines = [], chartKey = null, lastOhlc = 0, ohlcBusy = null, lastBar = null;
+// Live-Preis in die aktuelle 1-Minuten-Kerze schreiben (ohne neuen Abruf)
+function liveCandle(k, pr) {
+  if (!series || k !== chartKey || !lastBar || chartMode !== "bot") return;
+  const t = Math.floor(now() / 60000) * 60;
+  if (t < lastBar.time) return;
+  lastBar = t === lastBar.time ? { ...lastBar, high: Math.max(lastBar.high, pr), low: Math.min(lastBar.low, pr), close: pr } : { time: t, open: lastBar.close, high: Math.max(lastBar.close, pr), low: Math.min(lastBar.close, pr), close: pr };
+  try { series.update(lastBar); } catch {}
+}
 function pickFocus() {
   if (focusSel && (S.pos[focusSel] || mk[focusSel])) return focusSel;
   const pe = Object.entries(S.pos);
@@ -479,7 +529,7 @@ function localBars(k) {
   return Object.values(by);
 }
 async function loadOhlc(force) {
-  const k = focusKey; if (!k || ohlcBusy) return; // nie mehrere Chart-Abrufe gleichzeitig
+  const k = focusKey; if (!k || ohlcBusy || $("tv").classList.contains("embed")) return; // nie mehrere Chart-Abrufe gleichzeitig
   if (k === chartKey && now() - lastOhlc < (force ? 5000 : 20000)) return;
   ohlcBusy = k; lastOhlc = now();
   try { await loadOhlcFor(k); } finally { ohlcBusy = null; chartKey ||= k; }
@@ -523,7 +573,7 @@ function drawChart(k, bars) {
     lines = [];
   }
   series.applyOptions({ priceFormat: { type: "price", precision: dec, minMove: Math.pow(10, -dec) } });
-  series.setData(bars);
+  series.setData(bars); lastBar = { ...bars[bars.length - 1] };
   lines.forEach((l) => series.removePriceLine(l)); lines = [];
   if (p) {
     const add = (price, color, title) => lines.push(series.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title }));
@@ -627,7 +677,7 @@ function render() {
   $("trades").textContent = S.trades; $("wl").textContent = `${S.wins}W ${S.losses}L`;
   $("clock").textContent = `${Math.floor(el / 60)}h ${el % 60}m aktiv`;
   const e = Object.entries(errs);
-  const st = Object.entries(src).map(([k, s]) => `${k === "GeckoTerminal" ? "GT" : "DS"} ${s.ok === null ? "…" : s.ok ? "✓" : "✗"}`).join(" ");
+  const st = Object.entries(src).map(([k, s]) => `${SRC_TAG[k]} ${s.ok === null ? "…" : s.ok ? "✓" : "✗"}`).join(" ");
   const solDown = src.GeckoTerminal.ok === false && src.DexScreener.ok === false;
   $("sub").textContent = (solDown ? "⚠ Solana-Daten gerade nicht erreichbar – neuer Versuch folgt · " : e.length ? "⚠ " + e.map(([k, m]) => `${k}: ${m}`).join(" · ") + " · " : "")
     + `${nCg + nGt} Coins · ${nNew} neu · ${st}`;
@@ -668,7 +718,11 @@ function render() {
     const pool = fp?.pool || fm?.pool, mint = fp?.mint || fm?.mint;
     $("focus-links").innerHTML = pool ? `<a href="https://www.geckoterminal.com/solana/pools/${esc(pool)}" target="_blank" rel="noopener">📊 GeckoTerminal</a><a href="https://dexscreener.com/solana/${esc(pool)}" target="_blank" rel="noopener">📈 DexScreener</a>`
       : `<a href="https://www.coingecko.com/en/coins/${esc(fk.slice(3))}" target="_blank" rel="noopener">📊 CoinGecko</a><a href="https://www.tradingview.com/symbols/${esc(sym)}USD/" target="_blank" rel="noopener">📈 TradingView</a>`;
-    if (fk !== chartKey && !ohlcBusy) safe("Chart", () => loadOhlc(true));
+    const fpool = fp?.pool || fm?.pool;
+    document.querySelectorAll("#chart-mode button").forEach((b) => { b.classList.toggle("on", b.dataset.m === (fpool ? chartMode : "bot")); b.disabled = !fpool && b.dataset.m !== "bot"; });
+    $("live-info").textContent = fk.startsWith("gt:") ? (chartMode === "bot" ? `⚡ Preis alle ${JUP_MS / 1000} s über Jupiter${mk[fk]?.live ? ` · zuletzt ${Math.max(0, Math.round((now() - mk[fk].live) / 1000))} s` : ""}` : chartMode === "live1s" ? "⚡ Live-Chart von DexScreener mit 1-Sekunden-Kerzen (Zeitraum oben im Chart umstellbar · Einstieg/Ziel/Stop nur im Bot-Chart)" : "Live-Chart von GeckoTerminal (1 Min)") : "";
+    if (fpool && chartMode !== "bot") showEmbed(fpool);
+    else { if ($("tv").classList.contains("embed")) { $("tv").classList.remove("embed"); $("tv").innerHTML = ""; embedKey = ""; tv = null; chartKey = null; } if (fk !== chartKey && !ohlcBusy) safe("Chart", () => loadOhlc(true)); }
     // Rug-Panel für den Fokus-Coin
     if (mint && !rug[mint]) requestRug(mint, pool);
     renderRug(mint, sym);
@@ -752,6 +806,8 @@ $("cv-sol").oninput = () => renderSol();
 $("cv-fiat").oninput = () => renderSol();
 $("cv-cur").onchange = (e) => { solCur = e.target.value; try { localStorage.setItem("claudebot-cur", JSON.stringify(solCur)); } catch {} render(); solChart(false); };
 
+document.querySelectorAll("#chart-mode button").forEach((b) => (b.onclick = () => setChartMode(b.dataset.m)));
+
 render();
 safe("SOL-Preis", loadSol).then(() => solChart(true));
 Promise.all([ safe("CoinGecko", loadCG), guarded("DexScreener", loadDS), guarded("GeckoTerminal", loadGT)]).then(tick);
@@ -763,3 +819,4 @@ setInterval(() => guarded("DexScreener", loadDS), 30000);
 setInterval(() => safe("Positionen", loadHeld), 15000);
 setInterval(() => safe("Chart", () => loadOhlc(false)), 20000);
 setInterval(tick, TICK_MS);
+setInterval(() => guarded("Jupiter", loadLive), JUP_MS);

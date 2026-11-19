@@ -37,6 +37,20 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Schnellere Preise + 1-Sekunden-Chart (19.11.2026)
+- **Chart-Umschalter** im Top-Trade-Chart (`#chart-mode`):
+  - „📊 Bot-Chart“: eigener Chart mit Einstieg/Ziel/Stop, 1-Min-Kerzen + Live-Preis.
+  - „⚡ Live 1s“: eingebetteter **DexScreener-Chart mit 1-Sekunden-Kerzen**, gratis und live (`?embed=1&…&interval=1S`, geprüft).
+  - „GeckoTerminal“: Einbettung mit 1-Min-Kerzen. GTs eigene 1s-Ansicht blieb im Test leer; die GT-API gibt Sekunden-Kerzen nur im Bezahl-Tarif (401).
+  - Die Auswahl wird gespeichert. Bei etablierten Coins (z. B. DOGE) geht nur der Bot-Chart.
+- **Schnelle Preise über Jupiter** (`lite-api.jup.ag/price/v3?ids=…`, gratis, ohne Key, CORS ok):
+  - Alle 3 s für alle offenen Solana-Positionen + den Coin im Chart.
+  - Danach sofort `checkExits()` (Stop/Ziel/Trailing) statt nur alle 5 s mit 15–45 s alten Preisen.
+  - Jupiter selbst aktualisiert den Preis etwa alle 10 s (gemessen) – schneller geht es gratis nicht.
+  - Status oben: `⚡JUP ✓`.
+- Axiom: keine öffentliche API, Charts nur mit Login – nicht nutzbar.
+- Test: `node tests/test-live-chart.js` (echte APIs).
+
 ## Handy/iPad-Version + SOL-Kurs (19.11.2026)
 - **SOL-Kurs-Karte** (wie bei Google, `#sol-card` in `bot.html`, Code ab `// ---------- SOL-Kurs` in `src/bot.js`):
   - Preis in EUR (oder USD, umschaltbar), Änderung 24 Std., Verlauf 1 T./5 T./1 M./6 M./1 J. als Flächen-Chart (Lightweight Charts) und Umrechner SOL ↔ EUR/USD.
