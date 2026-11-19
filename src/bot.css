@@ -23,6 +23,9 @@ b { font-weight:650; }
 .brand { display:flex; gap:10px; align-items:center; font-size:18px; }
 .logo { width:38px; height:38px; border-radius:11px; display:grid; place-items:center; font-weight:800; font-size:19px;
   background:linear-gradient(135deg,var(--acc),var(--up)); color:#0b0d12; box-shadow:0 4px 18px rgba(153,69,255,.35); }
+.top-r { display:flex; gap:8px; align-items:center; }
+.icon-btn { width:34px; height:34px; padding:0; border-radius:50%; background:var(--card2); border:1px solid var(--line); font-size:15px; display:grid; place-items:center; }
+.icon-btn.spin { animation:spin 1s linear infinite; } @keyframes spin { to { transform:rotate(360deg); } }
 .live { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--up); background:rgba(20,241,149,.1); padding:6px 11px; border-radius:99px; border:1px solid rgba(20,241,149,.25); }
 .live i { width:7px; height:7px; border-radius:50%; background:var(--up); box-shadow:0 0 8px var(--up); animation:pulse 1.6s infinite; }
 .live.off { color:var(--mut); background:var(--card); border-color:var(--line); } .live.off i { background:var(--mut); box-shadow:none; animation:none; }

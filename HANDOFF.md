@@ -37,6 +37,11 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Neu-laden-Knopf (19.11.2026)
+- 🔄 oben rechts (`#reload`). Gedacht für die Home-Bildschirm-App, die keinen Reload hat.
+- Holt alle Dateien mit `fetch(…, { cache: "reload" })` am Browser-Cache vorbei – GitHub Pages cacht sonst bis zu 10 Min. Danach aktualisiert er den Service Worker und ruft `location.reload()` auf.
+- Depot und Einstellungen bleiben erhalten.
+
 ## Strenger Rug-Filter: eigene Bubblemaps-Logik (19.11.2026)
 Anlass war der Coin GTA „Grand Theft Alleycat“ (`8CnvwZJLRpQazvn6LszkzmXJxkmMY2bTQ4Q3NN4fpump`). Bubblemaps zeigte dort einen Riesen-Cluster um eine Wallet, RugCheck dagegen Score 1 und keine Insider-Netzwerke, und der Bot hätte gekauft.
 

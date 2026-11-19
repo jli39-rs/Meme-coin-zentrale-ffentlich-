@@ -978,6 +978,15 @@ $("c-sell").checked = !!CFG.notifySell;
 notifyInfo();
 
 // ---------- Bedienung ----------
+// Neu laden: In der Home-Bildschirm-App gibt es keinen Reload-Knopf. Erst alle Dateien am Browser-Cache vorbei neu holen
+// (GitHub Pages lässt sie sonst bis zu 10 Min im Cache), dann die Seite neu laden. Depot & Einstellungen bleiben erhalten.
+$("reload").onclick = async () => {
+  const b = $("reload"); b.classList.add("spin"); b.disabled = true; save();
+  const files = ["bot.html", "src/bot.js", "src/bot.css", "src/gate.js", "src/gate-config.js", "src/vendor/d3-force.js", "src/vendor/lightweight-charts.js", "sw.js", "manifest.webmanifest"];
+  await Promise.race([Promise.all(files.map((f) => fetch(f, { cache: "reload" }).catch(() => {}))), sleep(8000)]);
+  try { await swReg?.update(); } catch {}
+  location.reload();
+};
 $("toggle").onclick = () => { paused = !paused; $("toggle").textContent = paused ? "▶ Weiter" : "⏸ Pause"; render(); };
 $("reset").onclick = () => {
   const b = $("reset");
