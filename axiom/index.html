@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axiom Paper Trading – Installation</title>
+<style>body{margin:0;background:#0b0d12;color:#eef1f7;font:15px/1.5 -apple-system,system-ui,sans-serif}.w{max-width:640px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:22px}h2{font-size:17px;margin-top:26px}.c{background:#12151d;border:1px solid #222838;border-radius:14px;padding:14px;margin:10px 0}
+a.btn{display:block;text-align:center;background:linear-gradient(135deg,#9945ff,#14f195);color:#0b0d12;font-weight:800;padding:13px;border-radius:12px;text-decoration:none;margin:12px 0}
+.mut{color:#7d869b;font-size:13px}ol{padding-left:20px}li{margin:6px 0}b{color:#fff}.warn{border-color:#ffc542}</style></head>
+<body><div class="w">
+<h1>📝 Axiom Paper Trading</h1>
+<p>Ein kleines Zusatz-Fenster für <b>axiom.trade</b>: Du kaufst und verkaufst den Coin, den du gerade auf Axiom ansiehst, mit <b>virtuellen 5 SOL</b> – inklusive Live-Preis, Gewinn/Verlust, Take-Profit, Stop-Loss und Verlauf.</p>
+<div class="c warn">🔒 <b>Nur Simulation.</b> Das Skript fasst dein Wallet nie an, signiert nichts und drückt keine Kaufen-Knöpfe von Axiom. Preise kommen von Jupiter und DexScreener.</div>
+
+<h2>iPad / iPhone (Safari)</h2>
+<ol>
+<li>Im App Store die kostenlose App <b>„Userscripts“</b> (von Justin Wasack) laden.</li>
+<li><b>Einstellungen → Apps → Safari → Erweiterungen → Userscripts</b> einschalten und bei „Berechtigungen“ <b>axiom.trade</b> (oder „Alle Websites“) erlauben.</li>
+<li>Diese Seite in <b>Safari</b> öffnen und auf den Knopf tippen:</li>
+</ol>
+<a class="btn" href="axiom-paper.user.js">Skript installieren</a>
+<ol start="4">
+<li>Es öffnet sich der Skript-Text. Oben in der Adressleiste auf das <b>Erweiterungs-Symbol (Puzzleteil / „ᴀA“)</b> tippen → <b>Userscripts</b> → <b>Installieren</b>.</li>
+<li><b>axiom.trade</b> öffnen und einen Coin anklicken – unten rechts erscheint das Fenster „📝 Paper Trading“.</li>
+</ol>
+
+<h2>Mac (Safari, Chrome, Firefox)</h2>
+<ol><li><b>Userscripts</b> (Mac App Store, Safari) oder <b>Tampermonkey</b> (Chrome/Firefox) installieren.</li>
+<li>Auf <a href="axiom-paper.user.js" style="color:#4da3ff">axiom-paper.user.js</a> klicken → „Installieren“.</li></ol>
+
+<h2>Bedienung</h2>
+<div class="c">
+<b>Kauf 0.1 / 0.5 / 1</b> oder eigener Betrag · <b>Verk. 25/50/100 %</b> · Take-Profit / Stop-Loss in % eintragen (werden geprüft, solange die Seite offen ist) ·
+<b>▾</b> verkleinert zur Blase (zeigt den Depotwert) · Fenster am Kopf verschieben · Wird ein Coin nicht erkannt: Adresse ins Feld „Coin-Adresse einfügen“ kopieren.
+<p class="mut">Gebühren werden simuliert (1 % je Kauf/Verkauf + 0,0005 SOL). Echte Trades auf Axiom haben andere Kosten und Slippage. Das Paper-Depot ist getrennt vom Claude Bot.</p>
+</div>
+<p class="mut">Hinweis: Auf echtem axiom.trade noch nicht getestet (nur auf einer nachgebauten Seite). Falls die automatische Coin-Erkennung nicht klappt, sag Bescheid – das Einfüge-Feld funktioniert immer.</p>
+<p><a href="../bot.html" style="color:#4da3ff">← Claude Bot</a></p>
+</div></body></html>

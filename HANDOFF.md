@@ -37,6 +37,18 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
 5. **Cluster/Bundles** (in `analyseRug`): Cluster = Wallets mit gemeinsamer Quelle laut RugCheck-Insider-Graph. Blockiert, wenn der größte Cluster ≥ `clMax` hält, alle Cluster zusammen ≥ 1,5 × `clMax`, oder ein Bundle/Sniper-Muster (≥ `bundleN` Wallets aus einer Quelle mit ≥ `bundlePct`). Grund steht im Entscheidungs-Log („🛡️ blockiert …: Cluster aus 16 Wallets hält 24%“).
 6. **Anzeige**: Top-Trade-Kerzenchart mit Einstieg/Ziel/Stop-Linien, Positionen (antippbar), Rug-Panel mit **Cluster-Bubble-Map** (d3-force, `src/vendor/d3-force.js`): Ringe um die Funding-Quelle, Pfeile Quelle → Wallet, Farbe je Cluster, Pool blau, Dev orange, lose Holder violett; Bubble antippen zeigt Adresse + Solscan-Link. Darunter Cluster-Liste. Agenten, Live-Trades, Entscheidungs-Log (Wiederholungen werden zusammengefasst).
 
+## Axiom Paper Trading – Userscript (20.11.2026)
+- `axiom/axiom-paper.user.js`: ein Userscript für axiom.trade (iPad/iPhone: App „Userscripts“; Mac: Userscripts/Tampermonkey). Installationsseite: `axiom/index.html` → https://jli39-rs.github.io/Meme-coin-zentrale-ffentlich-/axiom/
+- Blendet ein Paper-Trading-Fenster ein (Shadow DOM, verschiebbar, zur Blase verkleinerbar):
+  - Virtuelle 5 SOL, Kauf 0,1/0,5/1/eigener Betrag, Verkauf 25/50/100 %.
+  - Take-Profit/Stop-Loss in % (Prüfung alle 2 s), offene Positionen und Verlauf.
+  - Simulierte Gebühren: 1 % je Seite + 0,0005 SOL.
+- Den Coin erkennt es über Base58-Adressen im Axiom-Link (Pool oder Token), die über DexScreener aufgelöst werden. Ersatz: ein Feld zum Einfügen der Adresse.
+- Preise kommen alle 2 s von der Jupiter Price API. Anfragen laufen über `GM.xmlHttpRequest` (umgeht CSP/CORS von Axiom), Speicher über `GM.getValue/setValue` mit localStorage als Ersatz.
+- **Nie echte Trades:** keine Wallet-Zugriffe, keine Klicks auf Axiom-Elemente, kein DOM-Auslesen außer der URL.
+- Test: `node tests/test-axiom-paper.js` – nachgebaute Axiom-Seite mit gemockten APIs.
+- **Nicht getestet:** auf dem echten axiom.trade (hier nicht erreichbar, Login nötig) und in der Userscripts-App auf iOS.
+
 ## Trade-Verlauf mit Chart (19.11.2026)
 - Neue Karte „📜 Trade-Verlauf“ (`#hist-card`, `renderHistory()`, `loadHistChart()`):
   - Zusammenfassung: Ergebnis, Trefferquote, Ø Trade, Gebühren.
