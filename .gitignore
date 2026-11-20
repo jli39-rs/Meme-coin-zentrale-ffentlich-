@@ -2,3 +2,4 @@ shot.png
 *.png
 node_modules/
 !icon-*.png
+backtest/daten/

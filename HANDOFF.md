@@ -187,3 +187,32 @@ Der Mock-Test prüft: Mint-Authority, Cluster (16 Wallets / 24 %) und Bundle (14
 - Kein echtes Trading, kein Wallet, keine Seed-Phrases/Private Keys – nur Simulation.
 - Keine Secrets ins Repo (das Repo ist öffentlich).
 - Ehrlich bleiben: Rug-Checks sind Faustregeln, kein Schutz vor Verlusten.
+
+
+## Datenbasierte Strategie „📊 Daten“ (Backtest 20.11.2026)
+
+Auftrag der Nutzerin: „Entwickel ein Gewinnsystem“. Ausführlicher Bericht und Skripte: `backtest/README.md`.
+
+**Vorgehen**
+- 110 Min echte Forward-Daten: 275 Pools, 6.646 Snapshots, 319 RugChecks, 1-Min-Kerzen.
+- Bewertung mit Train/Test-Split und 3 Zeitabschnitten.
+- Tote Pools (Liquidität abgezogen) zählen als −100 %.
+
+**Ergebnis**
+- Nichts war nach Gebühren verlässlich profitabel.
+- Die alte „Normal“-Strategie lag bei **−10,2 % pro Trade**.
+- Die neue Stufe „📊 Daten“ lag bei **−0,7 %** (95 %-Intervall −2,9 … +1,4, nur 14 Trades).
+
+**Eingebaut** (`PRESETS.daten` in `src/bot.js`)
+- Nur Solana-Pools (`maxCg: 0`).
+- Einstieg: Liq ≥ $60k, ≥ 55 % Käufe (`minBp`), 5m ≥ +1 % (`minCh5`), dazu die übrigen Safety-Filter sowie Rug- und Funding-Check wie bisher.
+- Ausstieg: Ziel +8 %, Stop −20 %, kein Trailing, Zeit-Exit nach 10 Min auch im Plus (`timeAll`).
+- Ist jetzt die Standard-Stufe. Wer „Normal“ eingestellt hatte, wird einmalig umgestellt (`CFG.v2`). Die anderen Stufen bleiben wählbar.
+
+**Test:** `tests/test-daten-preset.js`
+
+**Ungetestet/offen**
+- Kleine Stichprobe von einem Tag.
+- In der Live-App sind die Preise träger als 1-Min-Kerzen: Jupiter alle 3 s, Tick alle 5 s.
+- Etablierte Coins wurden nicht getestet.
+- Ein längerer Datenlauf (z. B. über GitHub Actions) wäre der nächste sinnvolle Schritt.

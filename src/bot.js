@@ -15,9 +15,12 @@ const PRESETS = {
   // clMax = größter Cluster (gemeinsame Funding-Quelle) in % · bundleN/bundlePct = ab so vielen Wallets aus einer Quelle mit so viel % → Bundle/Sniper
   vorsichtig: { size: 0.06, tp: 15, sl: 7,  trailOn: 8,  trail: 4,  maxPos: 4, minScore: 3.5, minLiq: 60000, timeMin: 120, maxRug: 25, maxCg: 1, clMax: 12, bundleN: 8,  bundlePct: 2 },
   normal:     { size: 0.10, tp: 30, sl: 12, trailOn: 12, trail: 6,  maxPos: 6, minScore: 3.0, minLiq: 25000, timeMin: 60,  maxRug: 40, maxCg: 1, clMax: 18, bundleN: 12, bundlePct: 4 },
+  // datenbasiert: Ergebnis des Backtests vom 20.11.2026 (110 Min echte Forward-Daten, 275 Pools, siehe HANDOFF.md).
+  // Nur liquide Solana-Pools mit Kaufdruck, kleines Ziel, schneller Ausstieg nach 10 Min. Verlor im Test am wenigsten – ist KEIN Gewinngarant.
+  daten:      { size: 0.10, tp: 8,  sl: 20, trailOn: 999, trail: 999, maxPos: 6, minScore: 0, minLiq: 60000, timeMin: 10, timeAll: true, minBp: 0.55, minCh5: 1, maxRug: 40, maxCg: 0, clMax: 18, bundleN: 12, bundlePct: 4 },
   aggressiv:  { size: 0.15, tp: 90, sl: 20, trailOn: 25, trail: 12, maxPos: 8, minScore: 2.5, minLiq: 12000, timeMin: 30,  maxRug: 55, maxCg: 2, clMax: 25, bundleN: 20, bundlePct: 6 },
 };
-const LABEL = { vorsichtig: "Vorsichtig", normal: "Normal", aggressiv: "Aggressiv" };
+const LABEL = { vorsichtig: "Vorsichtig", normal: "Normal", daten: "Daten", aggressiv: "Aggressiv" };
 
 // ---------- Helfer ----------
 const $ = (id) => document.getElementById(id);
@@ -47,7 +50,8 @@ if (!Array.isArray(S.closed)) {
     }
   }
 }
-let CFG = { risk: "normal", neu: true, etabliert: true, rug: true, ...load("claudebot-cfg", {}) };
+let CFG = { risk: "daten", neu: true, etabliert: true, rug: true, ...load("claudebot-cfg", {}) };
+if (!CFG.v2) { if (CFG.risk === "normal") CFG.risk = "daten"; CFG.v2 = 1; } // einmalig auf die datenbasierte Strategie umstellen
 const mk = {};            // Marktdaten: key -> Coin/Pool
 const rug = {};           // Rug-Check-Ergebnisse: mint -> Bericht
 const rugRaw = {};        // Rohdaten (Report + Insider-Graph) je mint – für Neuberechnung bei anderer Risikostufe
@@ -484,7 +488,7 @@ function score(m) {
     if (m.mcap < 5e6 || m.vol24 / m.mcap < 0.03) return { skip: "Safety: zu wenig Volumen" };
     // Solana-Fokus: etablierte Coins nur als Beimischung → gedämpfter, begrenzter Score
     const nCg = Object.values(S.pos).filter((p) => p.src === "cg").length;
-    if (nCg >= P().maxCg) return { skip: `Fokus Solana: schon ${nCg} etablierte${nCg > 1 ? "" : "r"} Coin` };
+    if (nCg >= P().maxCg) return { skip: P().maxCg ? `Fokus Solana: schon ${nCg} etablierte${nCg > 1 ? "" : "r"} Coin` : "Fokus Solana: diese Stufe kauft nur Solana-Pools" };
     const cl = (v, a, b) => Math.max(a, Math.min(b, v || 0));
     return { s: 1.5 + cl(m.ch1, -5, 6) / 1.5 + cl(m.ch24, -20, 60) / 30, why: `1h ${pct(m.ch1)} · 24h ${pct(m.ch24)}` };
   }
@@ -496,8 +500,8 @@ function score(m) {
   if (tx < 15) return { skip: `Safety: nur ${tx} Trades in 5 Min` };
   if (m.ch1 > 500) return { skip: `Risk: schon ${pct(m.ch1, 0)} in 1h – zu spät` };
   const bp = m.buys / tx;
-  if (bp < 0.5) return { skip: `Analyst: Verkaufsdruck (${(bp * 100).toFixed(0)}% Käufe)` };
-  if (m.ch5 < -3) return { skip: `Analyst: fällt gerade (${pct(m.ch5)} in 5 Min)` };
+  if (bp < (R.minBp ?? 0.5)) return { skip: `Analyst: zu wenig Kaufdruck (${(bp * 100).toFixed(0)}% Käufe)` };
+  if (m.ch5 < (R.minCh5 ?? -3)) return { skip: `Analyst: ${m.ch5 < 0 ? "fällt gerade" : "steigt kaum"} (${pct(m.ch5)} in 5 Min)` };
   if (m.buyers && m.buys / m.buyers > 4) return { skip: "Safety: wenige Wallets kaufen sehr oft (Bot-Volumen)" };
   const s = 1.2 + m.ch5 / 4 + Math.min(m.ch1, 150) / 50 + (bp - 0.5) * 6 + Math.min((m.vol5 / Math.max(m.liq, 1)) * 15, 1.5);
   return { s, why: `5m ${pct(m.ch5)} · ${(bp * 100).toFixed(0)}% Käufe · Liq $${big(m.liq)}` };
@@ -551,7 +555,7 @@ function checkExits() {
     else if (ch >= p.tp) sell(k, `Take-Profit ${pct(ch)}`);
     else if (ch <= -p.sl) sell(k, `Stop-Loss ${pct(ch)}`);
     else if (p.peak >= R.trailOn && p.peak - ch >= R.trail) sell(k, `Trailing-Stop (Hoch ${pct(p.peak)})`);
-    else if (mins > R.timeMin && ch < 2) sell(k, `Zeit-Exit nach ${Math.round(mins)} Min`);
+    else if (mins > R.timeMin && (R.timeAll || ch < 2)) sell(k, `Zeit-Exit nach ${Math.round(mins)} Min`);
   }
 }
 function tick() {
@@ -987,7 +991,8 @@ function render() {
   // Einstellungen
   document.querySelectorAll("#risk button").forEach((b) => b.classList.toggle("on", b.dataset.r === CFG.risk));
   $("c-neu").checked = CFG.neu; $("c-et").checked = CFG.etabliert; $("c-rug").checked = CFG.rug;
-  $("rinfo").textContent = `${R.size * 100}% pro Trade · Ziel +${R.tp}% · Stop −${R.sl}% · Trailing ab +${R.trailOn}% (−${R.trail}%) · max ${R.maxPos} Coins (davon max ${R.maxCg} etablierte) · Zeit-Exit ${R.timeMin} Min · Rug-Score ≤ ${R.maxRug}`;
+  $("rinfo").textContent = `${R.size * 100}% pro Trade · Ziel +${R.tp}% · Stop −${R.sl}% · ${R.trailOn < 100 ? `Trailing ab +${R.trailOn}% (−${R.trail}%)` : "kein Trailing"} · max ${R.maxPos} Coins (${R.maxCg ? `davon max ${R.maxCg} etablierte` : "nur Solana-Pools"}) · Zeit-Exit ${R.timeAll ? "immer " : ""}nach ${R.timeMin} Min · Rug-Score ≤ ${R.maxRug}`
+    + (R.minBp ? ` · nur Liq ≥ $${big(R.minLiq)}, ≥ ${Math.round(R.minBp * 100)}% Käufe, 5m ≥ +${R.minCh5}% · im Backtest −0,7 % pro Trade (statt −10 %) – kein Gewinngarant` : "");
   equityChart();
 }
 
