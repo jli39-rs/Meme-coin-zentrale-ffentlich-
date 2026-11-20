@@ -9,7 +9,7 @@ let price = 0.001;
 (async () => {
   const b = await chromium.launch(); let fail = 0;
   const ok = (c, t) => { console.log((c ? '✓ ' : '✗ ') + t); if (!c) fail++; };
-  const c = await b.newContext({ ...devices['iPad Pro 11'] }); const p = await c.newPage();
+  const c = await b.newContext({ ...devices['iPad Pro 11'], hasTouch: true }); const p = await c.newPage();
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.route('https://axiom.trade/**', (r) => r.fulfill({ contentType: 'text/html', body: '<html><body style="background:#000;color:#fff"><h1>Axiom (Attrappe)</h1></body></html>' }));
   await p.route('**/api.dexscreener.com/**', (r) => {
@@ -40,9 +40,16 @@ let price = 0.001;
   ok(st.pos[MINT] && st.closed[0].frac === 0.5, 'Teilverkauf 50 %');
   await load();
   ok(/Offene Positionen[\s\S]*MOON/.test(await sh('.w')), 'Depot bleibt nach Neuladen erhalten');
-  await p.evaluate((m) => { const r = document.getElementById('axpaper-host').shadowRoot; r.getElementById('ca').value = m; r.getElementById('go').click(); }, MINT2);
+  // Echtes Tippen wie auf dem iPad: Feld antippen, einfügen, 2,5 s warten (Fenster aktualisiert sich), dann OK antippen
+  await p.locator('#axpaper-host >> #ca').tap(); await p.keyboard.insertText('https://solscan.io/token/' + MINT2);
   await p.waitForTimeout(2500);
-  ok(/FROG/.test(await sh('.sec:nth-child(3)')), 'Adresse von Hand eingefügt → FROG');
+  await p.locator('#axpaper-host >> #go').tap(); await p.waitForTimeout(2500);
+  ok(/FROG/.test(await sh('.sec:nth-child(3)')), 'Adresse/Link getippt und OK angetippt → FROG');
+  // Axiom-Seite OHNE Adresse im Link, aber mit Solscan-Link auf der Seite → automatisch erkannt
+  await p.route('https://axiom.trade/coin-ohne-adresse', (r) => r.fulfill({ contentType: 'text/html', body: `<html><body style="background:#000"><a href="https://solscan.io/token/${MINT2}">Solscan</a></body></html>` }));
+  await p.evaluate(() => localStorage.clear());
+  await p.goto('https://axiom.trade/coin-ohne-adresse'); await p.addScriptTag({ content: SCRIPT }); await p.waitForTimeout(3500);
+  ok(/FROG/.test(await sh('.w')), 'Coin über Link auf der Seite erkannt (ohne Adresse in der URL)');
   await click('#min'); await p.waitForTimeout(200);
   ok(!!(await p.evaluate(() => document.getElementById('axpaper-host').shadowRoot.querySelector('.fab'))), 'verkleinert zur Blase');
   ok(errs.length === 0, 'keine JS-Fehler ' + errs.join(' | '));

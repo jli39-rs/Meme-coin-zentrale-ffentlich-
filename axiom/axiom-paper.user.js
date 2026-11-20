@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Axiom Paper Trading (Claude Bot)
 // @namespace    https://jli39-rs.github.io/Meme-coin-zentrale-ffentlich-/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Virtuelles Paper Trading direkt auf axiom.trade – kein Wallet, keine echten Trades, nur Simulation.
 // @match        https://axiom.trade/*
 // @match        https://*.axiom.trade/*
@@ -87,13 +87,26 @@
     tok[m] = { ...tok[m], sym: pair.baseToken.symbol, name: pair.baseToken.name, img: pair.info?.imageUrl || "", liq: pair.liquidity?.usd || 0,
       mcap: pair.marketCap || pair.fdv || 0, pair: pair.pairAddress, price: tok[m]?.price || +pair.priceUsd || 0, dex: pair.dexId };
   }
+  // Adressen in Links der Seite (Solscan, Pump.fun, DexScreener, Birdeye, GMGN, X-Suche …) und in Bild-Adressen
+  const LINK_HINT = /solscan|solana\.fm|pump\.fun|dexscreener|birdeye|gmgn|photon|bullx|rugcheck|bubblemaps|x\.com|twitter\.com|jup\.ag/i;
+  function pageCandidates() {
+    const out = [];
+    for (const a of document.querySelectorAll("a[href]")) { const h = a.getAttribute("href") || ""; if (LINK_HINT.test(h)) out.push(...(h.match(B58) || [])); }
+    for (const i of document.querySelectorAll("img[src]")) out.push(...((i.getAttribute("src") || "").match(B58) || []));
+    // häufigste Adresse zuerst (der angezeigte Coin taucht meist mehrfach auf)
+    const n = {}; out.forEach((x) => (n[x] = (n[x] || 0) + 1));
+    return Object.keys(n).sort((a, b) => n[b] - n[a]).slice(0, 6);
+  }
+  let urlInfo = "", tries = 0;
   async function detect(force) {
     const url = location.href;
-    if (!force && url === lastUrl) return;
-    lastUrl = url;
-    const cands = [...new Set((location.pathname + " " + location.search).match(B58) || [])];
-    for (const a of cands) { const m = await resolve(a); if (m) { setCoin(m); return; } }
-    if (cands.length) err = "Coin aus dem Link nicht gefunden – Adresse unten einfügen";
+    if (!force && url === lastUrl && (cur || tries > 5)) return;
+    if (url !== lastUrl) tries = 0;
+    lastUrl = url; tries++;
+    const fromUrl = [...new Set((location.pathname + " " + location.search + " " + location.hash).match(B58) || [])];
+    urlInfo = (location.pathname + location.search).slice(0, 80);
+    for (const a of [...fromUrl, ...pageCandidates()]) { const m = await resolve(a); if (m) { if (m !== cur) setCoin(m); return; } }
+    if (!cur) err = "Kein Coin erkannt – Adresse unten einfügen";
     render();
   }
   function setCoin(m) { cur = m; err = ""; render(); refresh(); }
@@ -181,9 +194,10 @@
   window.addEventListener("pointermove", (e) => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true; host.style.right = Math.max(0, drag.r - dx) + "px"; host.style.bottom = Math.max(0, drag.b - dy) + "px"; });
   window.addEventListener("pointerup", () => { if (drag?.moved) store.set(KEY + "-pos", { r: host.style.right, b: host.style.bottom }); setTimeout(() => (drag = null), 0); });
 
-  let typing = false;
+  const inp = { ca: "", amt: null }; // Eingaben über Neuzeichnen hinweg behalten
   function render() {
-    if (typing) return; // nicht neu zeichnen, während man tippt
+    // nicht neu zeichnen, solange ein Eingabefeld aktiv ist (sonst wird es geleert, bevor "OK" ankommt)
+    if (root.activeElement && root.activeElement.tagName === "INPUT") return;
     const ui = $("ui");
     if (!open) { ui.innerHTML = `<div class="fab" id="fab">📝<br>${sol(equity(), 2)}</div>`; $("fab").onclick = () => { if (drag?.moved) return; open = true; store.set(KEY + "-open", true); render(); }; return; }
     const v = equity(), pnl = v - START, t = cur ? tok[cur] : null, p = cur ? S.pos[cur] : null;
@@ -198,14 +212,14 @@
         <div class="row"><b>${t.img ? `<img src="${esc(t.img)}">` : ""}${esc(t.sym || "?")}</b><b>${fmtP(t.price)}</b></div>
         <div class="row t mut"><span>${esc(t.name || "")}</span><span>Liq $${big(t.liq)} · MC $${big(t.mcap)}</span></div>
         <div class="btns">${[0.1, 0.5, 1].map((a) => `<button class="b" data-buy="${a}">Kauf ${a}</button>`).join("")}</div>
-        <div class="btns"><input id="amt" type="number" inputmode="decimal" step="any" min="0" placeholder="SOL-Betrag" value="${S.size || ""}"><button class="b" id="buyx" style="flex:none;padding:9px 14px">Kauf</button></div>
+        <div class="btns"><input id="amt" type="number" inputmode="decimal" step="any" min="0" placeholder="SOL-Betrag" value="${inp.amt ?? S.size ?? ""}"><button class="b" id="buyx" style="flex:none;padding:9px 14px">Kauf</button></div>
         ${p ? `<div class="row" style="margin-top:8px"><span>Position: ${sol(pv)} SOL</span><b class="${ppnl >= 0 ? "up" : "dn"}">${ssol(ppnl)} (${pct(ppct)})</b></div>
           <div class="row t mut"><span>Einstieg ${fmtP(p.entry)}</span><span>seit ${Math.round((now() - p.ts) / 60000)} Min</span></div>
           <div class="btns">${[0.25, 0.5, 1].map((f) => `<button class="s" data-sell="${f}">Verk. ${f * 100}%</button>`).join("")}</div>
           <div class="btns"><input id="tp" type="number" inputmode="decimal" placeholder="Take-Profit %" value="${p.tp ?? ""}"><input id="sl" type="number" inputmode="decimal" placeholder="Stop-Loss %" value="${p.sl ?? ""}"></div>
           <div class="t mut">Take-Profit/Stop-Loss werden geprüft, solange die Seite offen ist.</div>` : ""}`
-        : `<div class="mut t">${esc(err) || "Öffne einen Coin auf Axiom – er wird automatisch erkannt."}</div>`}
-        <div class="btns"><input id="ca" placeholder="Coin-Adresse einfügen (Token oder Pool)"><button class="g" id="go" style="flex:none;padding:9px 12px">OK</button></div>
+        : `<div class="mut t">${esc(err) || "Öffne einen Coin auf Axiom – er wird automatisch erkannt."}</div>${urlInfo ? `<div class="t mut" style="word-break:break-all">Link: ${esc(urlInfo)}</div>` : ""}`}
+        <div class="btns"><input id="ca" placeholder="Coin-Adresse oder Link einfügen" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(inp.ca)}"><button class="g" id="go" style="flex:none;padding:9px 12px">OK</button></div>
         ${t && err ? `<div class="t dn">${esc(err)}</div>` : ""}</div>
       <div class="sec"><div class="row"><b>Offene Positionen</b><span class="t mut">${posList.length}</span></div>
         ${posList.map(([m, q]) => { const pv2 = valSol(m, q), pl = pv2 - q.cost; return `<div class="pos"><div class="row"><span>${q.img ? `<img src="${esc(q.img)}">` : ""}<b>${esc(q.sym)}</b></span><span class="${pl >= 0 ? "up" : "dn"}">${ssol(pl)} (${pct((pv2 / q.cost - 1) * 100)})</span></div>
@@ -220,13 +234,20 @@
     root.querySelectorAll("[data-sell]").forEach((b) => (b.onclick = () => sell(cur, +b.dataset.sell)));
     root.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => sell(b.dataset.close, 1)));
     root.querySelectorAll("[data-show]").forEach((b) => (b.onclick = () => setCoin(b.dataset.show)));
-    const amt = $("amt"); if (amt) $("buyx").onclick = () => { const a = parseFloat(amt.value.replace(",", ".")); if (a > 0) { S.size = a; buy(cur, a); } };
+    const amt = $("amt"); if (amt) { amt.oninput = () => (inp.amt = amt.value); $("buyx").onclick = () => { const a = parseFloat(String(inp.amt ?? amt.value).replace(",", ".")); if (a > 0) { S.size = a; inp.amt = null; buy(cur, a); } }; }
     const setLim = (id, f) => { const el = $(id); if (!el) return; el.onchange = () => { const x = parseFloat(el.value.replace(",", ".")); S.pos[cur][f] = x > 0 ? x : null; S[f] = S.pos[cur][f]; save(); toast(`${f === "tp" ? "Take-Profit" : "Stop-Loss"} ${x > 0 ? x + " %" : "aus"}`); }; };
     setLim("tp", "tp"); setLim("sl", "sl");
-    $("go").onclick = async () => { const a = ($("ca").value.match(B58) || [])[0]; if (!a) return toast("Keine gültige Adresse"); const m = await resolve(a); m ? setCoin(m) : toast("Coin nicht gefunden"); };
+    const go = async () => {
+      const raw = (inp.ca || $("ca")?.value || "").trim();
+      const all = raw.match(B58) || [];
+      if (!all.length) return toast(raw ? "Keine gültige Adresse erkannt: " + raw.slice(0, 24) : "Erst eine Adresse einfügen");
+      toast("Suche Coin…");
+      for (const a of all) { delete resolved[a]; const m = await resolve(a); if (m) { inp.ca = ""; $("ca")?.blur(); setCoin(m); return; } }
+      toast("Coin nicht gefunden (nicht auf Solana/DexScreener?)");
+    };
+    $("go").onclick = go;
+    const ca = $("ca"); ca.oninput = () => (inp.ca = ca.value); ca.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); inp.ca = ca.value; go(); } };
     $("reset").onclick = () => { if (confirm("Paper-Depot zurücksetzen? (Nur virtuelle SOL)")) { S = fresh(); save(); render(); } };
-    // Während Eingabe in Feldern nicht neu zeichnen (sonst springt der Cursor)
-    root.querySelectorAll("input").forEach((i) => { i.onfocus = () => (typing = true); i.onblur = () => { typing = false; setTimeout(render, 50); }; });
   }
 
   // ---------- Start ----------
