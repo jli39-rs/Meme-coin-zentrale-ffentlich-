@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Axiom Paper Trading (Claude Bot)
 // @namespace    https://jli39-rs.github.io/Meme-coin-zentrale-ffentlich-/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Virtuelles Paper Trading direkt auf axiom.trade – kein Wallet, keine echten Trades, nur Simulation.
 // @match        https://axiom.trade/*
 // @match        https://*.axiom.trade/*
@@ -28,7 +28,8 @@
   const START = 5;                 // virtuelles Startkapital in SOL
   const FEE = 0.01;                // simulierte DEX-Gebühr + Slippage je Seite (1 %)
   const NET_FEE = 0.0005;          // simulierte Netzwerk-/Priority-Gebühr je Trade in SOL
-  const PRICE_MS = 2000;           // Preis-Abfrage (Jupiter) alle 2 s
+  const PRICE_MS = 1000;           // Preis-Abfrage (Jupiter) jede Sekunde; bei Limit/Fehler kurz langsamer
+  const BACKOFF_MS = 4000;
   const WSOL = "So11111111111111111111111111111111111111112";
   const KEY = "axpaper-v1";
 
@@ -112,17 +113,24 @@
   function setCoin(m) { cur = m; err = ""; render(); refresh(); }
 
   // ---------- Preise ----------
-  let busy = false;
+  let busy = false, slow = 0, priceAt = 0;
   async function refresh() {
     if (busy) return; busy = true;
     try {
       const ids = [...new Set([WSOL, cur, ...Object.keys(S.pos)].filter(Boolean))].slice(0, 50);
       const d = await getJSON(`https://lite-api.jup.ag/price/v3?ids=${ids.join(",")}`);
       if (d[WSOL]?.usdPrice) solUsd = +d[WSOL].usdPrice;
-      for (const id of ids) if (id !== WSOL && d[id]?.usdPrice) { tok[id] = { ...tok[id], price: +d[id].usdPrice, t: now() }; if (d[id].liquidity) tok[id].liq = d[id].liquidity; }
+      let got = 0;
+      for (const id of ids) if (id !== WSOL && d[id]?.usdPrice) {
+        const pr = +d[id].usdPrice; got++;
+        if (pr !== tok[id]?.price) tok[id] = { ...tok[id], prev: tok[id]?.price, price: pr, t: now() }; // t = letzte Preisänderung
+        if (d[id].liquidity) tok[id].liq = d[id].liquidity;
+      }
+      if (ids.length > 1 && !got) throw new Error("Limit"); // leere Antwort = Anfrage-Limit
+      priceAt = now(); slow = 0;
       err = err.startsWith("Preis") ? "" : err;
       checkExits();
-    } catch (e) { err = "Preis gerade nicht erreichbar (" + e.message + ")"; }
+    } catch (e) { slow = now() + BACKOFF_MS; if (now() - priceAt > 15000) err = "Preis gerade nicht erreichbar (" + e.message + ")"; }
     busy = false; render();
   }
 
@@ -209,7 +217,8 @@
       <div class="sec"><div class="row"><span class="mut">Depot</span><span class="big">${sol(v)} <span class="t mut">SOL</span></span></div>
         <div class="row t"><span class="mut">frei ${sol(S.cash)} SOL${solUsd ? ` · ≈ $${(v * solUsd).toFixed(0)}` : ""}</span><span class="${pnl >= 0 ? "up" : "dn"}">${ssol(pnl)} SOL (${pct((v / START - 1) * 100)})</span></div></div>
       <div class="sec">${t ? `
-        <div class="row"><b>${t.img ? `<img src="${esc(t.img)}">` : ""}${esc(t.sym || "?")}</b><b>${fmtP(t.price)}</b></div>
+        <div class="row"><b>${t.img ? `<img src="${esc(t.img)}">` : ""}${esc(t.sym || "?")}</b><b class="${t.prev ? (t.price >= t.prev ? "up" : "dn") : ""}">${fmtP(t.price)}</b></div>
+        <div class="row t mut"><span>${slow > now() ? "⏸ kurze Pause (Anfrage-Limit)" : "⚡ Abfrage jede Sekunde"}</span><span>${t.t ? `Preis geändert vor ${Math.max(0, Math.round((now() - t.t) / 1000))} s` : ""}</span></div>
         <div class="row t mut"><span>${esc(t.name || "")}</span><span>Liq $${big(t.liq)} · MC $${big(t.mcap)}</span></div>
         <div class="btns">${[0.1, 0.5, 1].map((a) => `<button class="b" data-buy="${a}">Kauf ${a}</button>`).join("")}</div>
         <div class="btns"><input id="amt" type="number" inputmode="decimal" step="any" min="0" placeholder="SOL-Betrag" value="${inp.amt ?? S.size ?? ""}"><button class="b" id="buyx" style="flex:none;padding:9px 14px">Kauf</button></div>
@@ -257,6 +266,7 @@
     const pos = await store.get(KEY + "-pos", null); if (pos) { host.style.right = pos.r; host.style.bottom = pos.b; }
     render(); detect(true);
     setInterval(() => detect(false), 1000);   // Axiom wechselt Seiten ohne Neuladen → Link beobachten
-    setInterval(refresh, PRICE_MS);
+    const loop = async () => { if (now() >= slow) await refresh(); else render(); setTimeout(loop, PRICE_MS); };
+    loop();
   })();
 })();

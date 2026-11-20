@@ -44,6 +44,9 @@ Stand 18.11.2026, aus einer Claude-Code-Cloud-Session. Diese Datei erklärt alle
   - Take-Profit/Stop-Loss in % (Prüfung alle 2 s), offene Positionen und Verlauf.
   - Simulierte Gebühren: 1 % je Seite + 0,0005 SOL.
 - Den Coin erkennt es über Base58-Adressen im Axiom-Link (Pool oder Token), ab v1.1 auch über Links auf der Seite (Solscan, Pump.fun, DexScreener, GMGN, X …) und Bild-Adressen. Alles wird über DexScreener aufgelöst. Ersatz: Feld für eine Adresse oder einen Link, mit Enter oder „OK“. Ist kein Coin erkannt, zeigt das Fenster den aktuellen Link zur Fehlersuche an.
+- v1.2: Jupiter-Abfrage jede Sekunde. Eine leere Antwort oder ein Fehler gilt als Anfrage-Limit, dann folgen 4 s Pause.
+  - Gemessen ändert Jupiter den Preis bei aktiven Coins etwa alle 3–5 s.
+  - Anzeige: Preisfarbe grün/rot, „Preis geändert vor X s“.
 - v1.1: Das Fenster wird nicht neu gezeichnet, solange ein Eingabefeld aktiv ist. Vorher leerte das 2-s-Update das Feld vor dem „OK“-Tipp, was zur Meldung „keine gültige Adresse“ führte.
 - Preise kommen alle 2 s von der Jupiter Price API. Anfragen laufen über `GM.xmlHttpRequest` (umgeht CSP/CORS von Axiom), Speicher über `GM.getValue/setValue` mit localStorage als Ersatz.
 - **Nie echte Trades:** keine Wallet-Zugriffe, keine Klicks auf Axiom-Elemente, kein DOM-Auslesen außer der URL.
